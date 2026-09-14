@@ -1,0 +1,15 @@
+{
+  "name": "wedding-lottery",
+  "version": "1.0.0",
+  "private": true,
+  "description": "婚礼现场抽奖 H5",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.1"
+  }
+}

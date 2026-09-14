@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>新婚快乐 幸运大抽奖</title>
+  <link rel="stylesheet" href="/app.css" />
+  <script>
+    (function () {
+      var ua = navigator.userAgent || "";
+      var wx = /MicroMessenger/i.test(ua)
+        && !/WindowsWechat|MacWechat|WeChatForWindows|WeChatForMac/i.test(ua)
+        && /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+      if (!wx) document.documentElement.classList.add("need-wechat");
+    })();
+  </script>
+</head>
+<body class="guest">
+  <div class="cover" id="cover">
+    <div class="cover-photo"></div>
+    <div class="cover-shade"></div>
+    <div class="cover-content">
+      <p class="cover-couple" id="coverCouple">新郎  ♥  新娘</p>
+      <p class="cover-sub" id="coverSub">新婚快乐</p>
+      <h1 class="cover-title">幸运大抽奖</h1>
+      <p class="cover-count" id="coverCount">已有 0 人领取号码</p>
+      <p class="cover-closed hidden" id="claimClosed">抽奖已开始，停止领号</p>
+      <div class="cover-ticket hidden" id="coverTicket">
+        <p class="cover-ticket-kicker">你的幸运号码</p>
+        <div class="cover-ticket-num" id="coverTicketNum">000</div>
+        <p class="cover-ticket-note">微信仅可领取一次，请截图保存</p>
+      </div>
+      <button class="btn gold cover-btn" id="claimNumber" type="button">抽取幸运号码</button>
+      <button class="btn gold cover-btn hidden" id="enterLottery" type="button">观看抽奖</button>
+    </div>
+  </div>
+
+  <div class="atmosphere">
+    <div class="glow glow-a"></div>
+    <div class="glow glow-b"></div>
+    <div class="glow glow-c"></div>
+    <div class="watermark">囍</div>
+    <div class="petal petal-a">❀</div>
+    <div class="petal petal-b">❀</div>
+    <div class="petal petal-c">❀</div>
+    <canvas id="sparkles"></canvas>
+  </div>
+
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <p class="couple" id="couple">新郎  ♥  新娘</p>
+        <h1 id="title">新婚快乐 幸运大抽奖</h1>
+      </div>
+      <div class="top-actions">
+        <div class="my-ticket hidden" id="myTicket">
+          <span class="my-ticket-label">我的号码</span>
+          <strong id="myTicketNum">000</strong>
+        </div>
+        <button class="gear" id="toggleSound" type="button" title="抽奖音乐">音乐 开</button>
+        <button class="gear" id="openSettings" type="button" title="设置">设置</button>
+      </div>
+    </header>
+
+    <section class="drawn-strip">
+      <div class="strip-label">已抽号码</div>
+      <div class="strip-list" id="drawnStrip">
+        <span class="muted">暂无</span>
+      </div>
+    </section>
+
+    <div class="layout">
+      <main class="stage">
+        <div class="stage-head">
+          <p class="eyebrow" id="eyebrow">翻开红包 · 喜从天降</p>
+          <div class="level-ribbon" id="levelRibbon">三等奖</div>
+        </div>
+        <div class="wall-frame">
+          <div class="xi-wall" id="xiWall"></div>
+        </div>
+        <div class="stage-foot">
+          <p class="hint" id="hint">点击开始，从三等奖翻开囍字红包</p>
+          <div class="batch" id="batchRow"></div>
+          <div class="actions" id="actions"></div>
+        </div>
+      </main>
+
+      <aside class="board">
+        <h2>中奖记录</h2>
+        <div class="board-body" id="boardList"></div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="overlay hidden" id="revealOverlay">
+    <div class="reveal-seal">
+      <div class="reveal-xi">囍</div>
+      <p class="reveal-kicker">恭喜以下幸运嘉宾</p>
+      <div class="reveal-numbers" id="revealNumbers"></div>
+      <p class="reveal-level" id="revealLevel"></p>
+      <p class="reveal-prize" id="revealPrize"></p>
+      <p class="reveal-meaning" id="revealMeaning"></p>
+      <button class="btn gold" id="revealContinue" type="button">继续抽奖</button>
+    </div>
+  </div>
+
+  <div class="overlay hidden" id="youWin">
+    <div class="reveal-seal you-win-seal">
+      <div class="reveal-xi">囍</div>
+      <p class="reveal-kicker" id="youWinKicker">恭喜你中奖了</p>
+      <div class="hit-number you-win-num" id="youWinNumber">000</div>
+      <p class="reveal-level" id="youWinLevel"></p>
+      <p class="reveal-prize" id="youWinPrize"></p>
+      <p class="reveal-meaning" id="youWinMeaning"></p>
+      <button class="btn gold" id="youWinClose" type="button">我知道了</button>
+    </div>
+  </div>
+
+  <aside class="drawer hidden" id="settings">
+    <div class="drawer-head">
+      <h2>抽奖设置</h2>
+      <button class="ghost" id="closeSettings" type="button">关闭</button>
+    </div>
+    <form class="drawer-body" id="settingsForm">
+      <label>标题
+        <input name="title" maxlength="40" />
+      </label>
+      <label>新人称呼
+        <input name="couple" maxlength="40" />
+      </label>
+      <div class="row">
+        <label>号码起
+          <input name="numberMin" type="number" min="1" max="9999" />
+        </label>
+        <label>号码止
+          <input name="numberMax" type="number" min="1" max="9999" />
+        </label>
+      </div>
+      <label>未发放 / 空号（逗号分隔，可选）
+        <input name="excluded" placeholder="例如 13, 44, 88" />
+      </label>
+
+      <h3>奖项与奖品</h3>
+      <p class="tiny">抽奖按等级从下往上。同一奖品的红包翻齐后才会公布奖品和寓意。</p>
+      <div id="prizeEditor"></div>
+      <button class="btn outline" id="addLevel" type="button">添加奖项等级</button>
+
+      <div class="drawer-actions">
+        <button class="btn gold" type="submit" id="saveSettings">保存配置</button>
+        <button class="btn" type="button" id="resetDraws">重置抽奖记录</button>
+        <button class="btn danger" type="button" id="resetAll">恢复默认并重置</button>
+      </div>
+      <p class="tiny" id="settingsNote"></p>
+    </form>
+  </aside>
+  <div class="scrim hidden" id="scrim"></div>
+  <div class="hit-overlay hidden" id="hitOverlay">
+    <div class="hit-seal" id="hitSeal">
+      <p class="hit-kicker">幸运号码</p>
+      <div class="hit-number" id="hitNumber">000</div>
+    </div>
+  </div>
+  <div class="win-flash hidden" id="winFlash"></div>
+  <div class="wx-gate" id="wxGate">
+    <div class="wx-gate-card">
+      <p class="wx-gate-xi">囍</p>
+      <h2>请用微信打开</h2>
+      <p>请使用微信扫描现场二维码<br>每部手机只能领取一次号码</p>
+    </div>
+  </div>
+  <div class="toast hidden" id="toast"></div>
+
+  <script>window.LOTTERY_ROLE = "guest";</script>
+  <script src="/app.js"></script>
+</body>
+</html>
