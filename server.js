@@ -433,29 +433,25 @@ app.get("/api/qr.svg", (req, res, next) => {
 app.get("/api/host/session", (req, res) => {
   const store = loadStore();
   const token = hostTokenFrom(req);
-  const locked = Boolean(store.controller && store.controller.token);
-  const ok = locked && token && token === store.controller.token;
-  res.json({ ok, locked, claimedCount: store.guests.length });
+  const ok = Boolean(store.controller && store.controller.token && token && token === store.controller.token);
+  res.json({ ok, claimedCount: store.guests.length });
 });
 
 app.post("/api/host/login", (req, res, next) => {
   withStore((store) => {
     const password = String((req.body && req.body.password) || "");
     if (password !== HOST_PASSWORD) fail(403, "密码错误");
-    const existing = hostTokenFrom(req);
-    if (store.controller && store.controller.token) {
-      if (existing && existing === store.controller.token) {
-        return { ok: true, token: store.controller.token, first: false };
-      }
-      fail(403, "控制台已被占用，无法进入");
+    if (!store.controller || !store.controller.token) {
+      store.controller = {
+        token: crypto.randomBytes(24).toString("hex"),
+        lockedAt: new Date().toISOString(),
+      };
     }
-    const token = crypto.randomBytes(24).toString("hex");
-    store.controller = { token, lockedAt: new Date().toISOString() };
-    return { ok: true, token, first: true };
+    return { ok: true, token: store.controller.token };
   })
     .then((result) => {
       appendCookie(res, "host_token", result.token, "; HttpOnly");
-      res.json({ ok: true, first: result.first, claimedCount: loadStore().guests.length });
+      res.json({ ok: true, claimedCount: loadStore().guests.length });
     })
     .catch(next);
 });
@@ -463,12 +459,10 @@ app.post("/api/host/login", (req, res, next) => {
 app.post("/api/host/release", (req, res, next) => {
   withStore((store) => {
     requireHost(req, store);
-    store.controller = idleController();
     return { ok: true };
   })
     .then((result) => {
       appendCookie(res, "host_token", "", "; HttpOnly; Max-Age=0");
-      broadcast({ type: "state", state: publicState(loadStore()) });
       res.json(result);
     })
     .catch(next);

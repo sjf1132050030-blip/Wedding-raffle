@@ -1132,7 +1132,7 @@ if (resetGuestsBtn) {
 const releaseHostBtn = $("releaseHost");
 if (releaseHostBtn) {
   releaseHostBtn.addEventListener("click", async () => {
-    if (!confirm("释放控制台后，其他设备可以用密码重新进入。确定吗？")) return;
+    if (!confirm("退出后本机需要重新输入密码。其他已登录设备不受影响。确定吗？")) return;
     try {
       await api("/api/host/release", {});
       location.reload();
@@ -1216,9 +1216,7 @@ async function bootHost() {
       return;
     }
     ui.hostGate.classList.remove("hidden");
-    if (session.locked && ui.hostGateErr) {
-      ui.hostGateErr.textContent = "控制台已被占用，无法进入";
-    }
+    if (ui.hostGateErr) ui.hostGateErr.textContent = "";
   } catch (err) {
     if (ui.hostGateErr) ui.hostGateErr.textContent = err.message;
   }
