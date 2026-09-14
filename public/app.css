@@ -7,10 +7,21 @@
   --cream: #fff4d6;
   --ink: #7a101c;
   --muted: rgba(255, 244, 214, 0.82);
+  --u: 1vw;
+  --vh: 1vh;
 }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
+html {
+  background: #b31224;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+html.in-embed {
+  --u: calc(var(--embed-w, 375) * 0.01px);
+  --vh: calc(var(--embed-h, 800) * 0.01px);
+}
 body {
   font-family: "Noto Serif SC", "Songti SC", "STSong", "SimSun", serif;
   color: var(--cream);
@@ -27,15 +38,15 @@ body {
   border-radius: 50%;
   filter: blur(70px);
 }
-.glow-a { width: 46vw; height: 46vw; left: -8vw; top: -10vw; background: #ffd76a; opacity: 0.28; }
-.glow-b { width: 40vw; height: 40vw; right: -10vw; bottom: -12vw; background: #ff7a6a; opacity: 0.3; }
-.glow-c { width: 28vw; height: 28vw; left: 38%; top: 30%; background: #fff1b8; opacity: 0.12; }
+.glow-a { width: calc(var(--u) * 46); height: calc(var(--u) * 46); left: calc(var(--u) * -8); top: calc(var(--u) * -10); background: #ffd76a; opacity: 0.28; }
+.glow-b { width: calc(var(--u) * 40); height: calc(var(--u) * 40); right: calc(var(--u) * -10); bottom: calc(var(--u) * -12); background: #ff7a6a; opacity: 0.3; }
+.glow-c { width: calc(var(--u) * 28); height: calc(var(--u) * 28); left: 38%; top: 30%; background: #fff1b8; opacity: 0.12; }
 .watermark {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
-  font-size: min(62vw, 680px);
+  font-size: min(calc(var(--u) * 62), 680px);
   color: rgba(255, 255, 255, 0.08);
   font-weight: 700;
   user-select: none;
@@ -95,7 +106,7 @@ body {
 }
 .cover-title {
   margin: 12px 0 14px;
-  font-size: clamp(40px, 6.4vw, 78px);
+  font-size: clamp(40px, calc(var(--u) * 6.4), 78px);
   letter-spacing: 0.28em;
   text-indent: 0.28em;
   color: #fff6d0;
@@ -143,8 +154,8 @@ body {
 }
 .guest-qr-frame img {
   display: block;
-  width: min(42vw, 228px);
-  height: min(42vw, 228px);
+  width: min(calc(var(--u) * 42), 228px);
+  height: min(calc(var(--u) * 42), 228px);
   border-radius: 10px;
   background: #fff6d0;
 }
@@ -228,7 +239,7 @@ body {
   border-radius: 24px;
   background: radial-gradient(circle at 28% 22%, #fff8d0, #f0c14b 58%, #d7a230);
   color: var(--ink);
-  font-size: clamp(64px, 14vw, 140px);
+  font-size: clamp(64px, calc(var(--u) * 14), 140px);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.08em;
@@ -269,7 +280,7 @@ body {
 }
 .you-win-seal .you-win-num {
   margin: 8px auto 12px;
-  font-size: clamp(72px, 16vw, 140px);
+  font-size: clamp(72px, calc(var(--u) * 16), 140px);
 }
 .guest #openSettings,
 .guest #settings,
@@ -372,7 +383,7 @@ html.need-wechat .wx-gate { display: grid; }
 }
 h1 {
   margin: 4px 0 0;
-  font-size: clamp(22px, 3vw, 36px);
+  font-size: clamp(22px, calc(var(--u) * 3), 36px);
   font-weight: 700;
   letter-spacing: 0.16em;
   text-shadow: 0 2px 0 rgba(120, 16, 24, 0.25);
@@ -463,7 +474,7 @@ h1 {
   padding: 7px 34px 7px 42px;
   color: #fff6d0;
   letter-spacing: 0.4em;
-  font-size: clamp(18px, 2.2vw, 26px);
+  font-size: clamp(18px, calc(var(--u) * 2.2), 26px);
   background: linear-gradient(180deg, #ff5d66, #d2182c);
   clip-path: polygon(14px 0, calc(100% - 14px) 0, 100% 50%, calc(100% - 14px) 100%, 14px 100%, 0 50%);
   box-shadow: 0 8px 18px rgba(120, 10, 20, 0.28);
@@ -597,7 +608,7 @@ h1 {
   letter-spacing: 0.48em;
   text-indent: 0.48em;
   color: #ffe082;
-  font-size: clamp(14px, 2vw, 20px);
+  font-size: clamp(14px, calc(var(--u) * 2), 20px);
 }
 .hit-number {
   min-width: 2.1em;
@@ -605,7 +616,7 @@ h1 {
   border-radius: 28px;
   background: radial-gradient(circle at 28% 22%, #fff8d0, #f0c14b 58%, #d7a230);
   color: var(--ink);
-  font-size: clamp(92px, 17vw, 220px);
+  font-size: clamp(92px, calc(var(--u) * 17), 220px);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.08em;
@@ -623,7 +634,7 @@ h1 {
   to { transform: scale(0.72); opacity: 0; }
 }
 .wall-empty {
-  font-size: min(28vw, 220px);
+  font-size: min(calc(var(--u) * 28), 220px);
   color: #ffe082;
   text-shadow: 0 8px 0 #9a121c;
 }
@@ -768,14 +779,14 @@ h1 {
 .reveal-level { margin: 0; letter-spacing: 0.4em; color: #ffe082; }
 .reveal-prize {
   margin: 8px 0 6px;
-  font-size: clamp(32px, 6vw, 54px);
+  font-size: clamp(32px, calc(var(--u) * 6), 54px);
   letter-spacing: 0.16em;
 }
 .reveal-meaning {
   margin: 0 0 22px;
   color: #fff4d6;
   letter-spacing: 0.18em;
-  font-size: clamp(16px, 2.2vw, 22px);
+  font-size: clamp(16px, calc(var(--u) * 2.2), 22px);
 }
 
 .drawer {
@@ -843,7 +854,7 @@ input, select {
   50% { transform: translateY(-10px) rotate(12deg); }
 }
 
-@media (max-width: 900px) {
+@media (max-width: 900px), (max-device-width: 900px) {
   .app {
     height: 100%;
     padding: 10px 10px 12px;
@@ -857,16 +868,42 @@ input, select {
     grid-template-rows: minmax(0, 1fr) auto;
     gap: 10px;
   }
-  .board { max-height: 22vh; }
+  .board { max-height: calc(var(--vh) * 22); }
   .stage { gap: 8px; }
   .stage-foot { gap: 6px; }
   .cover-title { letter-spacing: 0.16em; text-indent: 0.16em; }
   .cover-btn { min-width: 180px; padding: 14px 32px; font-size: 18px; }
-  .hit-number { font-size: clamp(72px, 22vw, 140px); }
-  .guest-qr-frame img { width: min(56vw, 180px); height: min(56vw, 180px); }
+  .hit-number { font-size: clamp(72px, calc(var(--u) * 22), 140px); }
+  .guest-qr-frame img { width: min(calc(var(--u) * 56), 180px); height: min(calc(var(--u) * 56), 180px); }
   .host-qr-float { left: 8px; bottom: 8px; width: 96px; }
   .host-qr-float .guest-qr-frame img { width: 78px; height: 78px; }
   .my-ticket { padding: 5px 10px; gap: 6px; }
   .my-ticket strong { font-size: 15px; }
-  .cover-ticket-num { font-size: clamp(56px, 22vw, 96px); }
+  .cover-ticket-num { font-size: clamp(56px, calc(var(--u) * 22), 96px); }
 }
+
+html.is-phone .app {
+  height: 100%;
+  padding: 10px 10px 12px;
+  gap: 8px;
+}
+html.is-phone h1 { font-size: 18px; letter-spacing: 0.08em; }
+html.is-phone .couple { letter-spacing: 0.2em; font-size: 11px; }
+html.is-phone .gear { padding: 7px 10px; font-size: 13px; }
+html.is-phone .layout {
+  grid-template-columns: 1fr;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+html.is-phone .board { max-height: calc(var(--vh) * 22); }
+html.is-phone .stage { gap: 8px; }
+html.is-phone .stage-foot { gap: 6px; }
+html.is-phone .cover-title { letter-spacing: 0.16em; text-indent: 0.16em; }
+html.is-phone .cover-btn { min-width: 180px; padding: 14px 32px; font-size: 18px; }
+html.is-phone .hit-number { font-size: clamp(72px, calc(var(--u) * 22), 140px); }
+html.is-phone .guest-qr-frame img { width: min(calc(var(--u) * 56), 180px); height: min(calc(var(--u) * 56), 180px); }
+html.is-phone .host-qr-float { left: 8px; bottom: 8px; width: 96px; }
+html.is-phone .host-qr-float .guest-qr-frame img { width: 78px; height: 78px; }
+html.is-phone .my-ticket { padding: 5px 10px; gap: 6px; }
+html.is-phone .my-ticket strong { font-size: 15px; }
+html.is-phone .cover-ticket-num { font-size: clamp(56px, calc(var(--u) * 22), 96px); }

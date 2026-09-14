@@ -1147,8 +1147,10 @@ function sparkles() {
   const ctx = canvas.getContext("2d");
   const dots = [];
   function resize() {
-    canvas.width = innerWidth;
-    canvas.height = innerHeight;
+    const w = Math.max(1, canvas.clientWidth || innerWidth);
+    const h = Math.max(1, canvas.clientHeight || innerHeight);
+    canvas.width = w;
+    canvas.height = h;
   }
   function spawn() {
     dots.push({
