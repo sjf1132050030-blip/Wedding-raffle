@@ -1,5 +1,14 @@
 const $ = (id) => document.getElementById(id);
-const ROLE = window.LOTTERY_ROLE === "host" ? "host" : "guest";
+const ROLE = window.LOTTERY_ROLE === "host" || window.LOTTERY_ROLE === "control"
+  ? "control"
+  : window.LOTTERY_ROLE === "screen"
+    ? "screen"
+    : "guest";
+const CAN_CONTROL = ROLE === "control";
+
+function onEl(el, ev, fn) {
+  if (el) el.addEventListener(ev, fn);
+}
 
 const ui = {
   couple: $("couple"),
@@ -52,6 +61,10 @@ const ui = {
   hitOverlay: $("hitOverlay"),
   hitSeal: $("hitSeal"),
   hitNumber: $("hitNumber"),
+  shareQr: $("shareQr"),
+  shareQrCaption: $("shareQrCaption"),
+  claimedList: $("claimedList"),
+  claimedSummary: $("claimedSummary"),
 };
 
 let state = null;
@@ -77,33 +90,50 @@ function makeClip(src, volume = 1) {
 }
 
 const sfx = {
-  enabled: localStorage.getItem("lottery-sfx") !== "off",
+  enabled: ROLE === "control" ? false : localStorage.getItem("lottery-sfx") !== "off",
   ready: false,
   clips: {},
+  bgm: {
+    tracks: [
+      { src: "/audio/bgm-carefree.mp3", volume: 0.42 },
+      { src: "/audio/bgm-canon.mp3", volume: 0.38 },
+      { src: "/audio/bgm-story.mp3", volume: 0.42 },
+      { src: "/audio/bgm-lemon.mp3", volume: 0.4 },
+    ],
+    index: 0,
+    wanted: false,
+    el: null,
+    resumeTimer: 0,
+  },
 
   init() {
     if (this.clips.roll) return;
     this.clips = {
       roll: makeClip("/audio/roll.mp3", 0.9),
       drum: makeClip("/audio/drumroll.mp3", 0.58),
-      intro: makeClip("/audio/intro.mp3", 0.82),
       hit: makeClip("/audio/hit.mp3", 1),
       ding: makeClip("/audio/ding.mp3", 0.95),
       win: makeClip("/audio/win.mp3", 0.96),
       fanfare: makeClip("/audio/fanfare.mp3", 0.96),
       applause: makeClip("/audio/applause.mp3", 0.84),
     };
+    const first = this.bgm.tracks[0];
+    this.bgm.el = makeClip(first.src, first.volume);
+    this.bgm.el.addEventListener("ended", () => this.bgmNext());
   },
 
   async unlock() {
     this.init();
     if (!this.enabled) return;
     if (this.ready) return;
-    const clips = Object.values(this.clips);
+    const clips = [...Object.values(this.clips), this.bgm.el].filter(Boolean);
     await Promise.all(clips.map(async (a) => {
       try {
         a.muted = true;
-        await a.play();
+        await Promise.race([
+          a.play().catch(() => {}),
+          new Promise((r) => setTimeout(r, 400)),
+        ]);
         a.pause();
         a.currentTime = 0;
         a.muted = false;
@@ -146,11 +176,71 @@ const sfx = {
     }
   },
 
+  pauseBgm() {
+    clearTimeout(this.bgm.resumeTimer);
+    const a = this.bgm.el;
+    if (!a) return;
+    try { a.pause(); } catch { /* ignore */ }
+  },
+
+  preloadNextBgm() {
+    const n = this.bgm.tracks;
+    if (!n.length) return;
+    const t = n[(this.bgm.index + 1) % n.length];
+    if (!this._bgmPreload) this._bgmPreload = new Audio();
+    this._bgmPreload.preload = "auto";
+    if (this._bgmPreload.src.slice(-t.src.length) !== t.src) this._bgmPreload.src = t.src;
+  },
+
+  bgmNext() {
+    if (!this.bgm.tracks.length) return;
+    this.bgm.index = (this.bgm.index + 1) % this.bgm.tracks.length;
+    const t = this.bgm.tracks[this.bgm.index];
+    const a = this.bgm.el;
+    if (!a) return;
+    a.src = t.src;
+    a.volume = t.volume;
+    a.preload = "auto";
+    this.preloadNextBgm();
+    if (this.bgm.wanted && this.live() && !rolling) this.resumeBgm();
+  },
+
+  resumeBgm() {
+    if (!this.live() || !this.bgm.wanted || rolling) return;
+    const a = this.bgm.el;
+    const t = this.bgm.tracks[this.bgm.index];
+    if (!a || !t) return;
+    if (!a.paused && !a.ended) return;
+    try {
+      a.loop = false;
+      a.volume = t.volume;
+      const p = a.play();
+      if (p && p.catch) p.catch(() => {});
+    } catch { /* ignore */ }
+  },
+
+  scheduleBgmResume(ms = 1200) {
+    clearTimeout(this.bgm.resumeTimer);
+    this.bgm.resumeTimer = setTimeout(() => this.resumeBgm(), ms);
+  },
+
+  startBgm() {
+    if (!this.live()) return;
+    this.bgm.wanted = true;
+    this.preloadNextBgm();
+    this.resumeBgm();
+  },
+
+  stopBgm() {
+    this.bgm.wanted = false;
+    this.pauseBgm();
+  },
+
   tick() {},
 
   startRoll() {
     if (!this.live()) return;
-    this.stopClip(this.clips.intro);
+    this.pauseBgm();
     this.stopClip(this.clips.win);
     this.stopClip(this.clips.fanfare);
     this.stopClip(this.clips.applause);
@@ -172,6 +262,7 @@ const sfx = {
 
   hit() {
     if (!this.live()) return;
+    this.pauseBgm();
     this.stopRoll();
     this.playClip(this.clips.ding, { volume: 0.95 });
     this.playClip(this.clips.hit, { volume: 1 });
@@ -179,19 +270,21 @@ const sfx = {
 
   win() {
     if (!this.live()) return;
+    this.pauseBgm();
     this.playClip(this.clips.win, { volume: 0.96 });
   },
 
   fanfare() {
     if (!this.live()) return;
+    this.pauseBgm();
     this.stopAll(["fanfare", "applause"]);
     this.playClip(this.clips.fanfare, { volume: 0.96 });
     this.playClip(this.clips.applause, { volume: 0.84 });
+    this.scheduleBgmResume(10800);
   },
 
   intro() {
-    if (!this.live()) return;
-    this.playClip(this.clips.intro, { volume: 0.82 });
+    this.startBgm();
   },
 };
 
@@ -215,6 +308,7 @@ function burstWinFlash() {
 }
 
 function showHitNumber(number) {
+  if (!ui.hitOverlay || !ui.hitNumber || !ui.hitSeal) return;
   const max = displayMaxOf(state);
   ui.hitNumber.textContent = pad(number, max);
   ui.hitSeal.classList.remove("out");
@@ -225,6 +319,7 @@ function showHitNumber(number) {
 }
 
 async function hideHitNumber() {
+  if (!ui.hitOverlay || !ui.hitSeal) return;
   ui.hitSeal.classList.add("out");
   await sleep(320);
   ui.hitOverlay.classList.add("hidden");
@@ -241,20 +336,45 @@ function claimingOpen(s) {
   return !s.session.started && s.session.phase === "idle";
 }
 
-function renderGuestQr(s) {
-  if (ROLE !== "host") return;
-  const open = claimingOpen(s);
-  if (ui.coverQr) ui.coverQr.classList.toggle("hidden", !open);
-  if (ui.hostQrFloat) ui.hostQrFloat.classList.toggle("hidden", !open || coverOpen());
-  if (ROLE === "host" && ui.claimClosed) ui.claimClosed.classList.toggle("hidden", open);
-  if (!open) return;
-  const url = (s && s.guestUrl) || `${location.protocol}//${location.host}/`;
+function guestJoinUrl(s) {
+  return (s && s.guestUrl) || `${location.protocol}//${location.host}/`;
+}
+
+function fillQrImages(s) {
+  const url = guestJoinUrl(s);
   for (const el of document.querySelectorAll("[data-qr-url]")) el.textContent = url;
   for (const img of document.querySelectorAll("[data-qr-img]")) {
-    if (img.dataset.ready === url) continue;
-    img.dataset.ready = url;
-    img.src = "/api/qr.svg";
+    const to = img.dataset.qrTo || "guest";
+    const src = to === "guest" ? "/api/qr.svg" : `/api/qr.svg?to=${encodeURIComponent(to)}`;
+    const key = `${to}:${url}`;
+    if (img.dataset.ready === key) continue;
+    img.dataset.ready = key;
+    img.src = src;
   }
+}
+
+function renderGuestQr(s) {
+  fillQrImages(s);
+  const open = claimingOpen(s);
+  const showHostQr = ROLE === "screen" || CAN_CONTROL;
+  if (ui.coverQr) ui.coverQr.classList.toggle("hidden", !showHostQr || !open);
+  if (ui.hostQrFloat) ui.hostQrFloat.classList.toggle("hidden", !showHostQr || !open || coverOpen());
+  if (showHostQr && ui.claimClosed) ui.claimClosed.classList.toggle("hidden", open);
+  if (ui.shareQrCaption) {
+    ui.shareQrCaption.textContent = open ? "微信扫码领取幸运号码" : "微信扫码打开抽奖页面";
+  }
+}
+
+function openShareQr() {
+  fillQrImages(state);
+  if (ui.shareQrCaption) {
+    ui.shareQrCaption.textContent = claimingOpen(state) ? "微信扫码领取幸运号码" : "微信扫码打开抽奖页面";
+  }
+  if (ui.shareQr) ui.shareQr.classList.remove("hidden");
+}
+
+function closeShareQr() {
+  if (ui.shareQr) ui.shareQr.classList.add("hidden");
 }
 
 function syncClaimUi(s) {
@@ -372,6 +492,10 @@ function setMyNumber(n, max) {
 }
 
 function toast(message) {
+  if (!ui.toast) {
+    console.log(message);
+    return;
+  }
   ui.toast.textContent = message;
   ui.toast.classList.remove("hidden");
   clearTimeout(toastTimer);
@@ -380,6 +504,7 @@ function toast(message) {
 
 function setBusy(value) {
   busy = value;
+  if (!ui.actions) return;
   for (const btn of ui.actions.querySelectorAll("button")) btn.disabled = value || rolling;
 }
 
@@ -395,6 +520,7 @@ function wallNumbers(s) {
 }
 
 function renderStrip(s) {
+  if (!ui.drawnStrip) return;
   const max = displayMaxOf(s);
   if (!s.draws.length) {
     ui.drawnStrip.innerHTML = '<span class="muted">暂无</span>';
@@ -409,7 +535,18 @@ function renderStrip(s) {
     .join("");
 }
 
+function renderClaimed(s) {
+  const nums = Array.isArray(s.claimedNumbers) ? s.claimedNumbers : [];
+  const max = displayMaxOf(s);
+  if (ui.claimedSummary) ui.claimedSummary.textContent = `已领号码 ${nums.length}`;
+  if (!ui.claimedList) return;
+  ui.claimedList.innerHTML = nums.length
+    ? nums.map((n) => `<span class="tag">${pad(n, max)}</span>`).join("")
+    : '<span class="muted">暂无</span>';
+}
+
 function renderBoard(s) {
+  if (!ui.boardList) return;
   const grouped = s.levels.map((level) => {
     const prizes = s.prizes.filter((p) => p.levelId === level.id);
     const items = prizes.map((prize) => {
@@ -445,6 +582,7 @@ function cardHtml(n, flipped, max) {
 let lastFitKey = "";
 function fitWall(count) {
   const wall = ui.xiWall;
+  if (!wall) return;
   const areaW = wall.clientWidth;
   const areaH = wall.clientHeight;
   if (areaW < 40 || areaH < 40 || count <= 0) return;
@@ -482,7 +620,7 @@ function fitWall(count) {
 }
 
 function observeWall() {
-  if (ui.xiWall.dataset.observed) return;
+  if (!ui.xiWall || ui.xiWall.dataset.observed) return;
   ui.xiWall.dataset.observed = "1";
   const ro = new ResizeObserver(() => {
     const n = ui.xiWall.querySelectorAll(".xi-card").length;
@@ -492,6 +630,7 @@ function observeWall() {
 }
 
 function syncWall(s) {
+  if (!ui.xiWall) return;
   const nums = wallNumbers(s);
   const batch = new Set(s.session.currentBatch || []);
   const existing = [...ui.xiWall.querySelectorAll(".xi-card")].map((el) => Number(el.dataset.num));
@@ -518,54 +657,77 @@ function syncWall(s) {
   requestAnimationFrame(() => fitWall(nums.length));
 }
 
+function setText(el, value) {
+  if (el) el.textContent = value;
+}
+
+function maybeAutoEnterScreen(s) {
+  if (ROLE !== "screen") return;
+  if (!coverOpen()) return;
+  if (s && s.session && (s.session.started || (s.session.phase && s.session.phase !== "idle"))) {
+    enterLottery().then(() => {
+      if (!sfx.ready) toast("点击右上角开启音乐");
+    });
+  }
+}
+
 function renderStage(s) {
   document.title = s.config.title || "新婚快乐 幸运大抽奖";
-  ui.couple.textContent = s.config.couple;
-  ui.title.textContent = s.config.title;
-  if (ui.coverCouple) ui.coverCouple.textContent = s.config.couple;
+  setText(ui.couple, s.config.couple);
+  setText(ui.title, s.config.title);
+  setText(ui.coverCouple, s.config.couple);
   const level = currentLevel(s);
   const phase = s.session.phase;
   const prize = s.currentPrize;
   const max = displayMaxOf(s);
   if (ui.coverCount) ui.coverCount.textContent = `已有 ${s.claimedCount || 0} 人领取号码`;
   renderGuestQr(s);
+  renderClaimed(s);
   syncClaimUi(s);
+  maybeAutoEnterScreen(s);
 
   if (rolling) {
-    ui.hint.textContent = "红包逐个闪过，好运降临…";
+    setText(ui.hint, "红包逐个闪过，好运降临…");
   } else if (phase === "idle") {
-    ui.eyebrow.textContent = "翻开红包 · 喜从天降";
-    ui.levelRibbon.textContent = level ? level.name : "准备开始";
-    ui.hint.textContent = ROLE === "host"
+    setText(ui.eyebrow, "翻开红包 · 喜从天降");
+    setText(ui.levelRibbon, level ? level.name : "准备开始");
+    setText(ui.hint, CAN_CONTROL
       ? `已领取 ${s.claimedCount || 0} 个号码（设定 ${s.config.numberMin}–${s.config.numberMax}，超出顺延）${s.claimedCount ? "，可以开始" : "，等待宾客领号"}`
-      : "请等待现场开始抽奖";
+      : "请等待现场开始抽奖");
   } else if (phase === "level_done") {
-    ui.eyebrow.textContent = "本轮奖项已全部抽出";
-    ui.levelRibbon.textContent = `${level ? level.name : ""} 抽奖结束`;
-    ui.hint.textContent = s.nextLevel ? `点击开始抽取${s.nextLevel.name}` : "全部奖项已抽完";
+    setText(ui.eyebrow, "本轮奖项已全部抽出");
+    setText(ui.levelRibbon, `${level ? level.name : ""} 抽奖结束`);
+    setText(ui.hint, s.nextLevel
+      ? (CAN_CONTROL ? `点击开始抽取${s.nextLevel.name}` : `即将抽取${s.nextLevel.name}`)
+      : "全部奖项已抽完");
   } else if (phase === "all_done") {
-    ui.eyebrow.textContent = "抽奖结束";
-    ui.levelRibbon.textContent = "恭喜各位幸运嘉宾";
-    ui.hint.textContent = "所有奖项已抽出，完整记录见右侧";
+    setText(ui.eyebrow, "抽奖结束");
+    setText(ui.levelRibbon, "恭喜各位幸运嘉宾");
+    setText(ui.hint, "所有奖项已抽出，完整记录见右侧");
   } else {
-    ui.eyebrow.textContent = "当前正在抽取";
-    ui.levelRibbon.textContent = level ? level.name : "";
+    setText(ui.eyebrow, "当前正在抽取");
+    setText(ui.levelRibbon, level ? level.name : "");
     if (prize) {
-      ui.hint.textContent = `本轮共 ${prize.count} 个红包，已翻开 ${prize.drawn} 个，翻齐后公布奖品`;
+      setText(ui.hint, `本轮共 ${prize.count} 个红包，已翻开 ${prize.drawn} 个，翻齐后公布奖品`);
     } else {
-      ui.hint.textContent = "准备抽取";
+      setText(ui.hint, "准备抽取");
     }
   }
 
   const batch = s.session.currentBatch || [];
-  ui.batchRow.innerHTML = batch.map((n) => `<span class="tag done">${pad(n, max)}</span>`).join("");
+  if (ui.batchRow) {
+    ui.batchRow.innerHTML = batch.map((n) => `<span class="tag done">${pad(n, max)}</span>`).join("");
+  }
   renderActions(s);
   if (!rolling) syncWall(s);
 }
 
 function renderActions(s) {
-  if (ROLE !== "host") {
-    ui.actions.innerHTML = `<p class="tiny">现场同步中 · 已领取 ${s.claimedCount || 0} 个号码</p>`;
+  if (!ui.actions) return;
+  if (!CAN_CONTROL) {
+    ui.actions.innerHTML = ROLE === "guest"
+      ? `<p class="tiny">现场同步中 · 已领取 ${s.claimedCount || 0} 个号码</p>`
+      : "";
     return;
   }
   const phase = s.session.phase;
@@ -599,18 +761,21 @@ function revealPayload(s) {
 }
 
 function showReveal(payload, withConfetti) {
+  if (!ui.revealOverlay) return;
   const max = displayMaxOf(state);
-  ui.revealNumbers.innerHTML = payload.numbers.map((n) => `<span>${pad(n, max)}</span>`).join("");
-  ui.revealLevel.textContent = `获得 ${payload.levelName}`;
-  ui.revealPrize.textContent = payload.prizeName;
-  ui.revealMeaning.textContent = payload.meaning ? `寓意：${payload.meaning}` : "";
+  if (ui.revealNumbers) {
+    ui.revealNumbers.innerHTML = payload.numbers.map((n) => `<span>${pad(n, max)}</span>`).join("");
+  }
+  setText(ui.revealLevel, `获得 ${payload.levelName}`);
+  setText(ui.revealPrize, payload.prizeName);
+  setText(ui.revealMeaning, payload.meaning ? `寓意：${payload.meaning}` : "");
   const wasHidden = ui.revealOverlay.classList.contains("hidden");
   ui.revealOverlay.classList.remove("hidden");
   if (withConfetti && wasHidden) burstConfetti();
 }
 
 function hideReveal() {
-  ui.revealOverlay.classList.add("hidden");
+  if (ui.revealOverlay) ui.revealOverlay.classList.add("hidden");
 }
 
 function applyState(next, opts = {}) {
@@ -659,6 +824,10 @@ function scanDelay(i, n) {
 }
 
 async function flashToWinner(number) {
+  if (!ui.xiWall) {
+    await presentWin(number, null);
+    return;
+  }
   const cards = [...ui.xiWall.querySelectorAll(".xi-card:not(.flipped)")];
   const winner = ui.xiWall.querySelector(`.xi-card[data-num="${number}"]`);
   if (!winner) {
@@ -750,11 +919,17 @@ function enqueueDraw(number, next) {
     rolling = true;
     state = next || state;
     if (ui.hint) ui.hint.textContent = "红包逐个闪过，好运降临…";
-    for (const btn of ui.actions.querySelectorAll("button")) btn.disabled = true;
+    setBusy(true);
     try {
-      await flashToWinner(number);
+      if (CAN_CONTROL || !ui.xiWall) {
+        applyState(next || state, { skipStage: false });
+        await sleep(2200);
+      } else {
+        await flashToWinner(number);
+      }
     } finally {
       rolling = false;
+      sfx.scheduleBgmResume(5200);
     }
     applyState(next || state);
   }).catch(() => {});
@@ -842,14 +1017,13 @@ async function claimMyNumber() {
 }
 
 async function handleAction(act) {
-  if (ROLE !== "host") return;
+  if (!CAN_CONTROL) return;
   if (busy || rolling) return;
   try {
     setBusy(true);
     if (act === "start") {
       await sfx.unlock();
-      const next = await api("/api/start", {});
-      if (!wsLive) applyState(next);
+      applyState(await api("/api/start", {}));
       return;
     }
     if (act === "draw") {
@@ -869,15 +1043,13 @@ async function handleAction(act) {
     }
     if (act === "continue") {
       hideReveal();
-      const next = await api("/api/continue", {});
-      if (!wsLive) applyState(next);
+      applyState(await api("/api/continue", {}));
       return;
     }
     if (act === "reset") {
       if (!confirm("确定清空所有已抽号码并重新开始？奖项配置会保留。")) return;
-      const next = await api("/api/reset", {});
       playedDraws.clear();
-      if (!wsLive) applyState(next);
+      applyState(await api("/api/reset", {}));
     }
   } catch (err) {
     toast(err.message);
@@ -887,11 +1059,11 @@ async function handleAction(act) {
   }
 }
 
-ui.actions.addEventListener("click", (e) => {
+onEl(ui.actions, "click", (e) => {
   const btn = e.target.closest("button[data-act]");
   if (btn) handleAction(btn.dataset.act);
 });
-ui.revealContinue.addEventListener("click", () => handleAction("continue"));
+onEl(ui.revealContinue, "click", () => handleAction("continue"));
 
 window.addEventListener("keydown", (e) => {
   if (e.code !== "Space" && e.code !== "Enter") return;
@@ -906,28 +1078,36 @@ window.addEventListener("keydown", (e) => {
     enterLottery();
     return;
   }
-  if (ROLE !== "host") return;
-  if (!ui.hitOverlay.classList.contains("hidden")) return;
-  const btn = ui.revealOverlay.classList.contains("hidden")
-    ? ui.actions.querySelector("button")
-    : ui.revealContinue;
+  if (!CAN_CONTROL) return;
+  if (ui.hitOverlay && !ui.hitOverlay.classList.contains("hidden")) return;
+  const revealOpen = ui.revealOverlay && !ui.revealOverlay.classList.contains("hidden");
+  const btn = revealOpen
+    ? ui.revealContinue
+    : ui.actions && ui.actions.querySelector("button");
   if (btn) btn.click();
 });
 
 function openSettings() {
-  if (!state) return;
+  if (!state || !ui.settings) return;
   fillSettings(state);
   ui.settings.classList.remove("hidden");
-  ui.scrim.classList.remove("hidden");
+  if (ui.scrim) ui.scrim.classList.remove("hidden");
 }
 function closeSettings() {
-  ui.settings.classList.add("hidden");
-  ui.scrim.classList.add("hidden");
+  if (ui.settings) ui.settings.classList.add("hidden");
+  if (ui.scrim) ui.scrim.classList.add("hidden");
 }
 syncSoundButton();
-if (ui.enterLottery) ui.enterLottery.addEventListener("click", () => enterLottery());
-if (ui.claimNumber) ui.claimNumber.addEventListener("click", () => claimMyNumber());
-if (ui.youWinClose) ui.youWinClose.addEventListener("click", () => ui.youWin.classList.add("hidden"));
+onEl(ui.enterLottery, "click", () => enterLottery());
+onEl(ui.claimNumber, "click", () => claimMyNumber());
+onEl(ui.youWinClose, "click", () => ui.youWin.classList.add("hidden"));
+onEl($("closeShareQr"), "click", closeShareQr);
+onEl(ui.shareQr, "click", (e) => {
+  if (e.target === ui.shareQr) closeShareQr();
+});
+for (const btn of document.querySelectorAll("[data-open-share]")) {
+  btn.addEventListener("click", openShareQr);
+}
 if (ui.hostLogin) {
   ui.hostLogin.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -942,25 +1122,28 @@ if (ui.hostLogin) {
     }
   });
 }
-ui.toggleSound.addEventListener("click", async () => {
+onEl(ui.toggleSound, "click", async () => {
   sfx.enabled = !sfx.enabled;
   localStorage.setItem("lottery-sfx", sfx.enabled ? "on" : "off");
   syncSoundButton();
   if (sfx.enabled) {
     await sfx.unlock();
-    sfx.playClip(sfx.clips.ding, { volume: 0.9 });
+    if (!coverOpen()) sfx.startBgm();
+    else sfx.playClip(sfx.clips.ding, { volume: 0.9 });
     toast("音乐已打开");
   } else {
     sfx.ready = false;
     sfx.stopAll();
+    sfx.stopBgm();
     toast("音乐已关闭");
   }
 });
-$("openSettings").addEventListener("click", openSettings);
-$("closeSettings").addEventListener("click", closeSettings);
-$("scrim").addEventListener("click", closeSettings);
+onEl($("openSettings"), "click", openSettings);
+onEl($("closeSettings"), "click", closeSettings);
+onEl($("scrim"), "click", closeSettings);
 
 function fillSettings(s) {
+  if (!ui.settingsForm) return;
   const form = ui.settingsForm;
   form.title.value = s.config.title;
   form.couple.value = s.config.couple;
@@ -974,20 +1157,26 @@ function fillSettings(s) {
 }
 
 function syncSettingsLock() {
+  if (!ui.settingsForm) return;
   const locked = Boolean(state && (state.session.started || state.draws.length));
   for (const el of ui.settingsForm.querySelectorAll("input, select, button#saveSettings, button#addLevel")) {
     if (el.id === "resetDraws" || el.id === "resetAll" || el.id === "closeSettings") continue;
     el.disabled = locked;
   }
   const claimed = state && state.claimedCount ? state.claimedCount : 0;
-  ui.settingsNote.textContent = locked
-    ? `抽奖已开始。已领取 ${claimed} 个号码。如需改奖项，请先重置抽奖记录。`
-    : `保存后立即生效。宾客在首页领号，超过设定人数会自动顺延。当前已领取 ${claimed} 人。`;
-  ui.prizeEditor.style.pointerEvents = locked ? "none" : "";
-  ui.prizeEditor.style.opacity = locked ? "0.55" : "";
+  if (ui.settingsNote) {
+    ui.settingsNote.textContent = locked
+      ? `抽奖已开始。已领取 ${claimed} 个号码。如需改奖项，请先重置抽奖记录。`
+      : `保存后立即生效。宾客在首页领号，超过设定人数会自动顺延。当前已领取 ${claimed} 人。`;
+  }
+  if (ui.prizeEditor) {
+    ui.prizeEditor.style.pointerEvents = locked ? "none" : "";
+    ui.prizeEditor.style.opacity = locked ? "0.55" : "";
+  }
 }
 
 function renderPrizeEditor() {
+  if (!ui.prizeEditor) return;
   ui.prizeEditor.innerHTML = editLevels.map((level) => {
     const prizes = editPrizes.filter((p) => p.levelId === level.id);
     const rows = prizes.map((p) => `
@@ -1017,7 +1206,7 @@ function escapeAttr(value) {
   return String(value).replace(/"/g, "&quot;");
 }
 
-ui.prizeEditor.addEventListener("input", (e) => {
+onEl(ui.prizeEditor, "input", (e) => {
   const levelBox = e.target.closest("[data-level]");
   const prizeBox = e.target.closest("[data-prize]");
   if (prizeBox) {
@@ -1032,7 +1221,7 @@ ui.prizeEditor.addEventListener("input", (e) => {
   }
 });
 
-ui.prizeEditor.addEventListener("click", (e) => {
+onEl(ui.prizeEditor, "click", (e) => {
   const add = e.target.closest("[data-add-prize]");
   const delP = e.target.closest("[data-del-prize]");
   const delL = e.target.closest("[data-del-level]");
@@ -1058,13 +1247,13 @@ ui.prizeEditor.addEventListener("click", (e) => {
   }
 });
 
-$("addLevel").addEventListener("click", () => {
+onEl($("addLevel"), "click", () => {
   const id = `lv_${Math.random().toString(16).slice(2, 8)}`;
   editLevels.push({ id, name: "新奖项" });
   renderPrizeEditor();
 });
 
-ui.settingsForm.addEventListener("submit", async (e) => {
+onEl(ui.settingsForm, "submit", async (e) => {
   e.preventDefault();
   const form = ui.settingsForm;
   const excluded = String(form.excluded.value || "")
@@ -1091,7 +1280,7 @@ ui.settingsForm.addEventListener("submit", async (e) => {
   }
 });
 
-$("resetDraws").addEventListener("click", async () => {
+onEl($("resetDraws"), "click", async () => {
   if (!confirm("清空全部已抽号码，保留当前奖项和号码区间？")) return;
   try {
     applyState(await api("/api/reset", {}));
@@ -1102,7 +1291,7 @@ $("resetDraws").addEventListener("click", async () => {
   }
 });
 
-$("resetAll").addEventListener("click", async () => {
+onEl($("resetAll"), "click", async () => {
   if (!confirm("恢复默认奖项（三等奖到特等奖）并清空抽奖记录和已领号码？")) return;
   try {
     applyState(await api("/api/reset", { defaults: true }));
@@ -1144,6 +1333,7 @@ if (releaseHostBtn) {
 
 function sparkles() {
   const canvas = $("sparkles");
+  if (!canvas || !canvas.getContext) return;
   const ctx = canvas.getContext("2d");
   const dots = [];
   function resize() {
@@ -1194,6 +1384,7 @@ function sparkles() {
 
 function burstConfetti() {
   const canvas = $("sparkles");
+  if (!canvas) return;
   for (let i = 0; i < 100; i++) {
     confettiBits.push({
       x: canvas.width / 2,
@@ -1208,7 +1399,7 @@ function burstConfetti() {
 sparkles();
 
 async function bootHost() {
-  if (ROLE !== "host" || !ui.hostGate) return;
+  if (!CAN_CONTROL || !ui.hostGate) return;
   try {
     const session = await api("/api/host/session");
     if (session.ok) {
@@ -1225,6 +1416,11 @@ async function bootHost() {
 async function boot() {
   await bootHost();
   if (ROLE === "guest") await restoreGuest();
+  if (ROLE === "screen") {
+    const unlock = () => { sfx.unlock(); };
+    document.addEventListener("click", unlock);
+    document.addEventListener("touchstart", unlock, { passive: true });
+  }
   connectWs();
   await refresh();
 }

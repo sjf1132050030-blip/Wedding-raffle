@@ -286,6 +286,51 @@ body {
 .guest #settings,
 .guest #scrim { display: none !important; }
 .guest #revealContinue { display: none !important; }
+.screen .actions,
+.screen #revealContinue { display: none !important; }
+.cover-share {
+  margin-top: 10px;
+  min-width: 220px;
+  background: rgba(255, 213, 106, 0.16);
+  color: var(--gold);
+  box-shadow: none;
+}
+.cover-host-link {
+  margin: 18px 0 0;
+  font-size: 12px;
+  letter-spacing: 0.18em;
+}
+.cover-host-link a {
+  color: rgba(255, 244, 214, 0.72);
+  text-decoration: none;
+}
+.cover-host-link a:hover { color: var(--gold); }
+.share-qr-card {
+  width: min(420px, calc(100% - 32px));
+  padding: 28px 24px 24px;
+  text-align: center;
+  border-radius: 36px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 230, 150, 0.35), transparent 46%),
+    linear-gradient(180deg, #ff5a63, #c2182c);
+  box-shadow: 0 18px 50px rgba(90, 0, 20, 0.4);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.share-qr-kicker {
+  margin: 0 0 6px;
+  letter-spacing: 0.32em;
+  text-indent: 0.32em;
+  color: var(--gold);
+  font-size: 15px;
+}
+.share-qr-card .guest-qr-frame img {
+  width: min(calc(var(--u) * 52), 220px);
+  height: min(calc(var(--u) * 52), 220px);
+}
+.share-qr-card .btn { margin-top: 8px; min-width: 160px; }
 .host-gate {
   position: fixed;
   inset: 0;
@@ -741,6 +786,7 @@ h1 {
   background: rgba(120, 12, 22, 0.55);
   backdrop-filter: blur(8px);
 }
+#shareQr { z-index: 55; }
 .reveal-seal {
   width: min(640px, calc(100% - 32px));
   padding: 28px 28px 30px;
@@ -907,3 +953,110 @@ html.is-phone .host-qr-float .guest-qr-frame img { width: 78px; height: 78px; }
 html.is-phone .my-ticket { padding: 5px 10px; gap: 6px; }
 html.is-phone .my-ticket strong { font-size: 15px; }
 html.is-phone .cover-ticket-num { font-size: clamp(56px, calc(var(--u) * 22), 96px); }
+
+html.role-control,
+html.role-control body {
+  height: auto;
+  min-height: 100%;
+  overflow: auto;
+}
+html.role-control:has(#hostGate:not(.hidden)),
+html.role-control:has(#hostGate:not(.hidden)) body,
+html.role-control:has(#settings:not(.hidden)),
+html.role-control:has(#settings:not(.hidden)) body {
+  height: 100%;
+  overflow: hidden;
+}
+body.control {
+  overflow-x: hidden;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.control-app {
+  position: relative;
+  z-index: 1;
+  width: min(560px, 100%);
+  margin: 0 auto;
+  padding: 18px 16px 28px;
+  display: grid;
+  gap: 14px;
+}
+.control-top { text-align: center; }
+.control-top h1 {
+  margin: 6px 0 8px;
+  font-size: clamp(20px, 6vw, 28px);
+}
+.control-status {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 16px 14px 14px;
+  border-radius: 24px;
+  background: rgba(90, 8, 18, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(255, 213, 106, 0.3);
+  text-align: center;
+}
+.control-status .actions {
+  width: 100%;
+  position: sticky;
+  bottom: 8px;
+}
+.control-status .actions .btn {
+  width: 100%;
+  padding: 18px 24px;
+  font-size: 20px;
+}
+.control-status .hint { max-width: none; }
+.control .guest-qr {
+  margin: 0;
+  padding: 16px 12px;
+  border-radius: 24px;
+  background: rgba(90, 8, 18, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 213, 106, 0.22);
+}
+.control .guest-qr-frame img {
+  width: min(46vw, 200px);
+  height: min(46vw, 200px);
+}
+.control .drawn-strip {
+  width: 100%;
+  max-width: none;
+}
+.control .board {
+  max-height: none;
+  min-height: 160px;
+}
+.claimed-box {
+  border-radius: 18px;
+  background: rgba(90, 8, 18, 0.22);
+  box-shadow: inset 0 0 0 1px rgba(255, 213, 106, 0.28);
+  padding: 10px 14px 12px;
+  color: var(--cream);
+}
+.claimed-box summary {
+  cursor: pointer;
+  letter-spacing: 0.18em;
+  color: var(--gold);
+  font-size: 13px;
+}
+.claimed-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+  max-height: 180px;
+  overflow: auto;
+}
+.control-tools {
+  display: grid;
+  gap: 8px;
+}
+.control-tools .btn,
+.control-tools a.btn {
+  text-align: center;
+  text-decoration: none;
+}
+.control .drawer {
+  width: 100%;
+  height: 100dvh;
+  z-index: 45;
+}

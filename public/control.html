@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="role-control">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <title>抽奖控制台</title>
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body class="control">
+  <div class="host-gate" id="hostGate">
+    <div class="host-gate-card">
+      <p class="cover-couple">控制台</p>
+      <h1>现场抽奖</h1>
+      <p class="tiny">用手机打开此页，控制大屏抽奖。输入密码即可进入，多台设备可以同时操作。</p>
+      <form id="hostLogin">
+        <input name="password" type="password" inputmode="numeric" autocomplete="off" placeholder="请输入密码" />
+        <button class="btn gold" type="submit">进入控制台</button>
+      </form>
+      <p class="tiny host-gate-err" id="hostGateErr"></p>
+    </div>
+  </div>
+
+  <div class="atmosphere">
+    <div class="glow glow-a"></div>
+    <div class="glow glow-b"></div>
+    <div class="watermark">囍</div>
+    <canvas id="sparkles"></canvas>
+  </div>
+
+  <div class="control-app">
+    <header class="control-top">
+      <p class="couple" id="couple">新郎  ♥  新娘</p>
+      <h1 id="title">新婚快乐 幸运大抽奖</h1>
+      <p class="cover-count" id="coverCount">已有 0 人领取号码</p>
+    </header>
+
+    <section class="control-status">
+      <p class="eyebrow" id="eyebrow">翻开红包 · 喜从天降</p>
+      <div class="level-ribbon" id="levelRibbon">三等奖</div>
+      <p class="hint" id="hint">等待宾客领号后，即可开始抽奖</p>
+      <div class="batch" id="batchRow"></div>
+      <div class="actions" id="actions"></div>
+    </section>
+
+    <section class="control-qr guest-qr" id="coverQr">
+      <div class="guest-qr-frame">
+        <img data-qr-img alt="抽奖页面二维码" />
+        <span class="guest-qr-xi">囍</span>
+      </div>
+      <p class="guest-qr-caption">请宾客用微信扫码领号</p>
+      <p class="guest-qr-note">也可以把这个二维码亮给宾客扫</p>
+      <p class="guest-qr-url" data-qr-url></p>
+    </section>
+    <p class="cover-closed hidden" id="claimClosed">抽奖已开始，停止领号</p>
+
+    <section class="drawn-strip">
+      <div class="strip-label">已抽号码</div>
+      <div class="strip-list" id="drawnStrip">
+        <span class="muted">暂无</span>
+      </div>
+    </section>
+
+    <details class="claimed-box">
+      <summary id="claimedSummary">已领号码 0</summary>
+      <div class="claimed-list" id="claimedList"></div>
+    </details>
+
+    <aside class="board">
+      <h2>中奖记录</h2>
+      <div class="board-body" id="boardList"></div>
+    </aside>
+
+    <div class="control-tools">
+      <button class="btn gold" id="openSettings" type="button">抽奖设置</button>
+      <a class="btn outline" href="/screen" target="_blank" rel="noopener">打开大屏</a>
+    </div>
+  </div>
+
+  <div class="overlay hidden" id="revealOverlay">
+    <div class="reveal-seal">
+      <div class="reveal-xi">囍</div>
+      <p class="reveal-kicker">恭喜以下幸运嘉宾</p>
+      <div class="reveal-numbers" id="revealNumbers"></div>
+      <p class="reveal-level" id="revealLevel"></p>
+      <p class="reveal-prize" id="revealPrize"></p>
+      <p class="reveal-meaning" id="revealMeaning"></p>
+      <button class="btn gold" id="revealContinue" type="button">继续抽奖</button>
+    </div>
+  </div>
+
+  <aside class="drawer hidden" id="settings">
+    <div class="drawer-head">
+      <h2>抽奖设置</h2>
+      <button class="ghost" id="closeSettings" type="button">关闭</button>
+    </div>
+    <form class="drawer-body" id="settingsForm">
+      <label>标题
+        <input name="title" maxlength="40" />
+      </label>
+      <label>新人称呼
+        <input name="couple" maxlength="40" />
+      </label>
+      <div class="row">
+        <label>号码起
+          <input name="numberMin" type="number" min="1" max="9999" />
+        </label>
+        <label>号码止
+          <input name="numberMax" type="number" min="1" max="9999" />
+        </label>
+      </div>
+      <label>未发放 / 空号（逗号分隔，可选）
+        <input name="excluded" placeholder="例如 13, 44, 88" />
+      </label>
+
+      <h3>奖项与奖品</h3>
+      <p class="tiny">抽奖按等级从下往上。同一奖品的红包翻齐后才会公布奖品和寓意。宾客超过设定人数时号码会自动顺延。</p>
+      <div id="prizeEditor"></div>
+      <button class="btn outline" id="addLevel" type="button">添加奖项等级</button>
+
+      <div class="drawer-actions">
+        <button class="btn gold" type="submit" id="saveSettings">保存配置</button>
+        <button class="btn" type="button" id="resetDraws">重置抽奖记录</button>
+        <button class="btn" type="button" id="resetGuests">清空已领号码</button>
+        <button class="btn danger" type="button" id="resetAll">恢复默认并重置</button>
+        <button class="btn danger" type="button" id="releaseHost">退出控制台</button>
+      </div>
+      <p class="tiny" id="settingsNote"></p>
+    </form>
+  </aside>
+  <div class="scrim hidden" id="scrim"></div>
+  <div class="toast hidden" id="toast"></div>
+
+  <script>window.LOTTERY_ROLE = "control";</script>
+  <script src="/app.js"></script>
+</body>
+</html>

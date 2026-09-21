@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="role-screen">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+  <title>婚礼抽奖大屏</title>
+  <script src="/embed-fit.js"></script>
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body class="screen">
+  <div class="cover" id="cover">
+    <div class="cover-photo"></div>
+    <div class="cover-shade"></div>
+    <div class="cover-content">
+      <p class="cover-couple" id="coverCouple">新郎  ♥  新娘</p>
+      <p class="cover-sub" id="coverSub">新婚快乐</p>
+      <h1 class="cover-title">幸运大抽奖</h1>
+      <p class="cover-count" id="coverCount">已有 0 人领取号码</p>
+      <div class="guest-qr" id="coverQr">
+        <div class="guest-qr-frame">
+          <img data-qr-img alt="抽奖页面二维码" />
+          <span class="guest-qr-xi">囍</span>
+        </div>
+        <p class="guest-qr-caption">微信扫码领取幸运号码</p>
+        <p class="guest-qr-note">仅手机微信，每部手机一次</p>
+        <p class="guest-qr-url" data-qr-url></p>
+      </div>
+      <p class="cover-closed hidden" id="claimClosed">抽奖已开始，停止领号</p>
+      <button class="btn gold cover-btn" id="enterLottery" type="button">进入大屏</button>
+      <p class="cover-host-link"><a href="/control">司仪控制台</a></p>
+    </div>
+  </div>
+
+  <div class="atmosphere">
+    <div class="glow glow-a"></div>
+    <div class="glow glow-b"></div>
+    <div class="glow glow-c"></div>
+    <div class="watermark">囍</div>
+    <div class="petal petal-a">❀</div>
+    <div class="petal petal-b">❀</div>
+    <div class="petal petal-c">❀</div>
+    <canvas id="sparkles"></canvas>
+  </div>
+
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <p class="couple" id="couple">新郎  ♥  新娘</p>
+        <h1 id="title">新婚快乐 幸运大抽奖</h1>
+      </div>
+      <div class="top-actions">
+        <button class="gear" id="toggleSound" type="button" title="婚礼背景音乐：Carefree / 卡农 / Our Story Begins / Easy Lemon（Kevin MacLeod）">音乐 开</button>
+      </div>
+    </header>
+
+    <section class="drawn-strip">
+      <div class="strip-label">已抽号码</div>
+      <div class="strip-list" id="drawnStrip">
+        <span class="muted">暂无</span>
+      </div>
+    </section>
+
+    <div class="layout">
+      <main class="stage">
+        <div class="stage-head">
+          <p class="eyebrow" id="eyebrow">翻开红包 · 喜从天降</p>
+          <div class="level-ribbon" id="levelRibbon">三等奖</div>
+        </div>
+        <div class="wall-frame">
+          <div class="xi-wall" id="xiWall"></div>
+        </div>
+        <div class="stage-foot">
+          <p class="hint" id="hint">请等待司仪开始抽奖</p>
+          <div class="batch" id="batchRow"></div>
+          <div class="actions" id="actions"></div>
+        </div>
+      </main>
+
+      <aside class="board">
+        <h2>中奖记录</h2>
+        <div class="board-body" id="boardList"></div>
+      </aside>
+    </div>
+  </div>
+
+  <div class="overlay hidden" id="revealOverlay">
+    <div class="reveal-seal">
+      <div class="reveal-xi">囍</div>
+      <p class="reveal-kicker">恭喜以下幸运嘉宾</p>
+      <div class="reveal-numbers" id="revealNumbers"></div>
+      <p class="reveal-level" id="revealLevel"></p>
+      <p class="reveal-prize" id="revealPrize"></p>
+      <p class="reveal-meaning" id="revealMeaning"></p>
+    </div>
+  </div>
+
+  <div class="hit-overlay hidden" id="hitOverlay">
+    <div class="hit-seal" id="hitSeal">
+      <p class="hit-kicker">幸运号码</p>
+      <div class="hit-number" id="hitNumber">000</div>
+    </div>
+  </div>
+  <div class="win-flash hidden" id="winFlash"></div>
+  <aside class="host-qr-float hidden" id="hostQrFloat">
+    <div class="guest-qr-frame compact">
+      <img data-qr-img alt="抽奖页面二维码" />
+    </div>
+    <p class="guest-qr-caption">微信扫码</p>
+  </aside>
+  <div class="toast hidden" id="toast"></div>
+
+  <script>window.LOTTERY_ROLE = "screen";</script>
+  <script src="/app.js"></script>
+</body>
+</html>

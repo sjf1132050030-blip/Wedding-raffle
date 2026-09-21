@@ -12,8 +12,9 @@ if not exist "node_modules\" (
   call npm install
 )
 echo 正在启动婚礼抽奖
-echo 控制台: http://localhost:3780/start
+echo 大屏展示: http://localhost:3780/screen
+echo 手机控制: http://localhost:3780/control
 echo 宾客领号: http://localhost:3780
-start "" http://localhost:3780/start
+start "" http://localhost:3780/screen
 node server.js
 pause

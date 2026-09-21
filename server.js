@@ -273,7 +273,9 @@ function publicState(store) {
     claimedNumbers: claimed,
     displayMax: displayMax(store),
     hostLocked: Boolean(store.controller && store.controller.token),
-    guestUrl: guestPageUrl(),
+    guestUrl: publicPageUrl(null, "/"),
+    screenUrl: publicPageUrl(null, "/screen"),
+    controlUrl: publicPageUrl(null, "/control"),
     claimingOpen: claimingOpen(store),
   };
 }
@@ -337,7 +339,7 @@ function hostTokenFrom(req) {
 
 function requireHost(req, store) {
   if (!store.controller || !store.controller.token) {
-    fail(403, "请先打开 /start 登录控制台");
+    fail(403, "请先打开 /control 登录控制台");
   }
   if (hostTokenFrom(req) !== store.controller.token) {
     fail(403, "只有控制台可以操作抽奖");
@@ -398,9 +400,18 @@ function withStore(mutator) {
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-app.get("/start", (_req, res) => {
+app.get("/screen", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  res.sendFile(path.join(PUBLIC_DIR, "start.html"));
+  res.sendFile(path.join(PUBLIC_DIR, "screen.html"));
+});
+
+app.get("/control", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.sendFile(path.join(PUBLIC_DIR, "control.html"));
+});
+
+app.get("/start", (_req, res) => {
+  res.redirect(302, "/screen");
 });
 
 app.use(express.static(PUBLIC_DIR, {
@@ -415,7 +426,9 @@ app.get("/api/state", (_req, res) => {
 });
 
 app.get("/api/qr.svg", (req, res, next) => {
-  QRCode.toString(guestPageUrl(req), {
+  const to = String(req.query.to || "guest").toLowerCase();
+  const pathname = to === "control" ? "/control" : to === "screen" ? "/screen" : "/";
+  QRCode.toString(publicPageUrl(req, pathname), {
     type: "svg",
     margin: 1,
     width: 640,
@@ -780,12 +793,17 @@ function preferredLanIP() {
   return lanIPs().slice().sort((a, b) => score(a) - score(b))[0] || "localhost";
 }
 
-function guestPageUrl(req) {
+function publicPageUrl(req, pathname = "/") {
   const rawHost = String((req && req.headers && req.headers.host) || "");
   const hostname = rawHost.split(":")[0];
   const local = !hostname || hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
   const host = local ? preferredLanIP() : hostname;
-  return `http://${host}:${PORT}/`;
+  const path = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  return `http://${host}:${PORT}${path}`;
+}
+
+function guestPageUrl(req) {
+  return publicPageUrl(req, "/");
 }
 
 const server = http.createServer(app);
@@ -799,16 +817,33 @@ function broadcast(payload) {
 }
 
 wss.on("connection", (socket) => {
+  socket.on("error", (err) => {
+    console.error("WebSocket 连接错误:", err.message);
+  });
   socket.send(JSON.stringify({ type: "state", state: publicState(loadStore()) }));
+});
+wss.on("error", (err) => {
+  console.error("WebSocket 服务错误:", err);
+});
+server.on("error", (err) => {
+  console.error("HTTP 服务错误:", err);
+});
+process.on("uncaughtException", (err) => {
+  console.error("未捕获异常:", err);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("未处理的 Promise:", err);
 });
 
 server.listen(PORT, "0.0.0.0", () => {
   const ips = lanIPs();
   console.log(`婚礼抽奖服务已启动`);
-  console.log(`宾客领号: http://localhost:${PORT}`);
-  console.log(`控制台:   http://localhost:${PORT}/start`);
+  console.log(`宾客领号: http://localhost:${PORT}/`);
+  console.log(`大屏展示: http://localhost:${PORT}/screen`);
+  console.log(`手机控制: http://localhost:${PORT}/control`);
   for (const ip of ips) {
-    console.log(`宾客局域网: http://${ip}:${PORT}`);
-    console.log(`控制台局域网: http://${ip}:${PORT}/start`);
+    console.log(`宾客局域网: http://${ip}:${PORT}/`);
+    console.log(`大屏局域网: http://${ip}:${PORT}/screen`);
+    console.log(`控制局域网: http://${ip}:${PORT}/control`);
   }
 });

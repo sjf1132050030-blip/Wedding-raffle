@@ -33,6 +33,7 @@
       </div>
       <button class="btn gold cover-btn" id="claimNumber" type="button">抽取幸运号码</button>
       <button class="btn gold cover-btn hidden" id="enterLottery" type="button">观看抽奖</button>
+      <button class="btn outline cover-btn cover-share" data-open-share type="button">分享二维码</button>
     </div>
   </div>
 
@@ -58,8 +59,8 @@
           <span class="my-ticket-label">我的号码</span>
           <strong id="myTicketNum">000</strong>
         </div>
-        <button class="gear" id="toggleSound" type="button" title="抽奖音乐">音乐 开</button>
-        <button class="gear" id="openSettings" type="button" title="设置">设置</button>
+        <button class="gear" id="toggleSound" type="button" title="婚礼背景音乐：Carefree / 卡农 / Our Story Begins / Easy Lemon（Kevin MacLeod）">音乐 开</button>
+        <button class="gear" data-open-share type="button" title="分享二维码">二维码</button>
       </div>
     </header>
 
@@ -162,6 +163,19 @@
     </div>
   </div>
   <div class="win-flash hidden" id="winFlash"></div>
+  <div class="overlay hidden" id="shareQr">
+    <div class="share-qr-card">
+      <p class="share-qr-kicker">邀请宾客扫码进入</p>
+      <div class="guest-qr-frame">
+        <img data-qr-img alt="抽奖页面二维码" />
+        <span class="guest-qr-xi">囍</span>
+      </div>
+      <p class="guest-qr-caption" id="shareQrCaption">微信扫码领取幸运号码</p>
+      <p class="guest-qr-note">把这个二维码亮给旁边的人扫</p>
+      <p class="guest-qr-url" data-qr-url></p>
+      <button class="btn gold" id="closeShareQr" type="button">关闭</button>
+    </div>
+  </div>
   <div class="wx-gate" id="wxGate">
     <div class="wx-gate-card">
       <p class="wx-gate-xi">囍</p>
