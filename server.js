@@ -12,6 +12,18 @@ const HOST_PASSWORD = "147258";
 const DATA_DIR = path.join(__dirname, "data");
 const STORE_PATH = path.join(DATA_DIR, "store.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
+const DEFAULT_AUDIO_CDN = [
+  "https://cdn.jsdmirror.com/gh/sjf1132050030-blip/Wedding-raffle@main/public",
+  "https://cdn.jsdelivr.net/gh/sjf1132050030-blip/Wedding-raffle@main/public",
+];
+
+function audioCdnList() {
+  const raw = process.env.AUDIO_CDN;
+  if (raw == null || String(raw).trim() === "") return DEFAULT_AUDIO_CDN.slice();
+  const s = String(raw).trim();
+  if (/^(off|none|0|false)$/i.test(s)) return [];
+  return s.split(/[,;\s]+/).map((item) => item.replace(/\/$/, "")).filter(Boolean);
+}
 
 const LEVEL_PRESET = [
   { id: "l3", name: "三等奖" },
@@ -277,6 +289,7 @@ function publicState(store) {
     screenUrl: publicPageUrl(null, "/screen"),
     controlUrl: publicPageUrl(null, "/control"),
     claimingOpen: claimingOpen(store),
+    audioCdn: audioCdnList(),
   };
 }
 
@@ -415,9 +428,14 @@ app.get("/start", (_req, res) => {
 });
 
 app.use(express.static(PUBLIC_DIR, {
-  etag: false,
-  setHeaders(res) {
-    res.setHeader("Cache-Control", "no-store");
+  etag: true,
+  setHeaders(res, filePath) {
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === ".mp3" || ext === ".jpg" || ext === ".jpeg" || ext === ".png" || ext === ".webp" || ext === ".gif") {
+      res.setHeader("Cache-Control", "public, max-age=86400");
+    } else {
+      res.setHeader("Cache-Control", "no-store");
+    }
   },
 }));
 
@@ -838,6 +856,8 @@ process.on("unhandledRejection", (err) => {
 server.listen(PORT, "0.0.0.0", () => {
   const ips = lanIPs();
   console.log(`婚礼抽奖服务已启动`);
+  const cdn = audioCdnList();
+  console.log(cdn.length ? `音频CDN: ${cdn.join("  ")}` : "音频CDN: 关闭（使用本站 /audio）");
   console.log(`宾客领号: http://localhost:${PORT}/`);
   console.log(`大屏展示: http://localhost:${PORT}/screen`);
   console.log(`手机控制: http://localhost:${PORT}/control`);

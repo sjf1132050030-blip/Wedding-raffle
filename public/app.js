@@ -80,12 +80,151 @@ let wsLive = false;
 let youWinShownFor = "";
 const playedDraws = new Set();
 
-function makeClip(src, volume = 1) {
-  const a = new Audio(src);
-  a.preload = "auto";
+const DEFAULT_AUDIO_CDN = Array.isArray(window.LOTTERY_AUDIO_CDN)
+  ? window.LOTTERY_AUDIO_CDN
+  : (window.LOTTERY_AUDIO_CDN
+    ? [window.LOTTERY_AUDIO_CDN]
+    : [
+      "https://cdn.jsdmirror.com/gh/sjf1132050030-blip/Wedding-raffle@main/public",
+      "https://cdn.jsdelivr.net/gh/sjf1132050030-blip/Wedding-raffle@main/public",
+    ]);
+
+const BGM_TRACKS = [
+  { file: "bgm-carefree.mp3", volume: 0.42 },
+  { file: "bgm-canon.mp3", volume: 0.38 },
+  { file: "bgm-story.mp3", volume: 0.42 },
+  { file: "bgm-lemon.mp3", volume: 0.4 },
+];
+
+const SFX_CLIP_DEFS = {
+  roll: { file: "roll.mp3", volume: 0.9 },
+  drum: { file: "drumroll.mp3", volume: 0.58 },
+  hit: { file: "hit.mp3", volume: 1 },
+  ding: { file: "ding.mp3", volume: 0.95 },
+  win: { file: "win.mp3", volume: 0.96 },
+  fanfare: { file: "fanfare.mp3", volume: 0.96 },
+  applause: { file: "applause.mp3", volume: 0.84 },
+};
+
+function joinAudioUrl(base, file) {
+  const name = String(file || "").replace(/^\/+/, "");
+  const b = String(base || "").replace(/\/$/, "");
+  if (!b) return `/audio/${name}`;
+  if (/\/audio$/i.test(b)) return `${b}/${name}`;
+  return `${b}/audio/${name}`;
+}
+
+function normalizeAudioCdn(bases) {
+  const list = bases == null ? DEFAULT_AUDIO_CDN : bases;
+  const arr = Array.isArray(list) ? list : [list];
+  const out = [];
+  for (const item of arr) {
+    const b = String(item || "").trim().replace(/\/$/, "");
+    if (b && out.indexOf(b) < 0) out.push(b);
+  }
+  return out;
+}
+
+function audioUrlsFor(file) {
+  const urls = [];
+  if (sfx.base) urls.push(joinAudioUrl(sfx.base, file));
+  const local = joinAudioUrl("", file);
+  if (urls.indexOf(local) < 0) urls.push(local);
+  return urls;
+}
+
+function bindAudioSources(el, file) {
+  el._audioFile = file;
+  el._audioUrlIndex = 0;
+  if (!el._audioFallbackBound) {
+    el._audioFallbackBound = true;
+    el.addEventListener("error", () => {
+      const urls = audioUrlsFor(el._audioFile);
+      if (el._audioUrlIndex + 1 >= urls.length) return;
+      el._audioUrlIndex += 1;
+      el.src = urls[el._audioUrlIndex];
+      try { el.load(); } catch { /* ignore */ }
+      const wantPlay = sfx.bgm && el === sfx.bgm.el && sfx.bgm.wanted && sfx.live() && !rolling;
+      if (wantPlay) {
+        const p = el.play();
+        if (p && p.catch) p.catch(() => {});
+      }
+    });
+  }
+  const urls = audioUrlsFor(file);
+  el.src = urls[0] || "";
+  return el;
+}
+
+function probeAudioUrl(url, timeoutMs) {
+  return new Promise((resolve) => {
+    const a = new Audio();
+    let done = false;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try {
+        a.removeAttribute("src");
+        a.load();
+      } catch { /* ignore */ }
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    a.addEventListener("error", () => finish(false));
+    a.addEventListener("canplay", () => finish(true));
+    a.preload = "auto";
+    try {
+      a.src = url;
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+function firstOk(promises) {
+  return new Promise((resolve, reject) => {
+    const n = promises.length;
+    if (!n) {
+      reject(new Error("empty"));
+      return;
+    }
+    let failed = 0;
+    let settled = false;
+    for (const p of promises) {
+      Promise.resolve(p).then((value) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      }, () => {
+        failed += 1;
+        if (!settled && failed >= n) reject(new Error("all failed"));
+      });
+    }
+  });
+}
+
+async function pickAudioBase(bases, timeoutMs = 1200) {
+  const list = normalizeAudioCdn(bases);
+  if (!list.length) return "";
+  try {
+    return await firstOk(list.map(async (base) => {
+      const ok = await probeAudioUrl(joinAudioUrl(base, "ding.mp3"), timeoutMs);
+      if (!ok) throw new Error("cdn miss");
+      return base;
+    }));
+  } catch {
+    return "";
+  }
+}
+
+function makeClip(file, volume = 1) {
+  const a = new Audio();
+  a.preload = "none";
   a.volume = volume;
   a.preservesPitch = true;
   a.webkitPreservesPitch = true;
+  bindAudioSources(a, file);
   return a;
 }
 
@@ -93,43 +232,61 @@ const sfx = {
   enabled: ROLE === "control" ? false : localStorage.getItem("lottery-sfx") !== "off",
   ready: false,
   clips: {},
+  base: "",
+  _baseKey: null,
+  _baseGen: 0,
+  _basePromise: null,
   bgm: {
-    tracks: [
-      { src: "/audio/bgm-carefree.mp3", volume: 0.42 },
-      { src: "/audio/bgm-canon.mp3", volume: 0.38 },
-      { src: "/audio/bgm-story.mp3", volume: 0.42 },
-      { src: "/audio/bgm-lemon.mp3", volume: 0.4 },
-    ],
+    tracks: BGM_TRACKS.map((t) => ({ file: t.file, volume: t.volume })),
     index: 0,
     wanted: false,
     el: null,
     resumeTimer: 0,
   },
 
+  prepare(bases) {
+    if (ROLE === "control") {
+      this.base = "";
+      this._baseKey = "";
+      this._basePromise = Promise.resolve("");
+      return this._basePromise;
+    }
+    const list = normalizeAudioCdn(bases == null ? DEFAULT_AUDIO_CDN : bases);
+    const key = list.join("|");
+    if (this._basePromise && this._baseKey === key) return this._basePromise;
+    this._baseKey = key;
+    const gen = ++this._baseGen;
+    this._basePromise = pickAudioBase(list).then((base) => {
+      if (gen !== this._baseGen) return this.base;
+      this.base = base;
+      return base;
+    });
+    return this._basePromise;
+  },
+
   init() {
     if (this.clips.roll) return;
-    this.clips = {
-      roll: makeClip("/audio/roll.mp3", 0.9),
-      drum: makeClip("/audio/drumroll.mp3", 0.58),
-      hit: makeClip("/audio/hit.mp3", 1),
-      ding: makeClip("/audio/ding.mp3", 0.95),
-      win: makeClip("/audio/win.mp3", 0.96),
-      fanfare: makeClip("/audio/fanfare.mp3", 0.96),
-      applause: makeClip("/audio/applause.mp3", 0.84),
-    };
+    this.clips = {};
+    for (const [name, def] of Object.entries(SFX_CLIP_DEFS)) {
+      this.clips[name] = makeClip(def.file, def.volume);
+    }
     const first = this.bgm.tracks[0];
-    this.bgm.el = makeClip(first.src, first.volume);
+    this.bgm.el = makeClip(first.file, first.volume);
     this.bgm.el.addEventListener("ended", () => this.bgmNext());
+    this.bgm.el.addEventListener("timeupdate", () => this.maybePreloadNextBgm());
   },
 
   async unlock() {
-    this.init();
     if (!this.enabled) return;
+    if (!this._basePromise) this.prepare();
+    try { await this._basePromise; } catch { /* 用自己网站上的音频 */ }
+    this.init();
     if (this.ready) return;
     const clips = [...Object.values(this.clips), this.bgm.el].filter(Boolean);
     await Promise.all(clips.map(async (a) => {
       try {
         a.muted = true;
+        a.preload = "auto";
         await Promise.race([
           a.play().catch(() => {}),
           new Promise((r) => setTimeout(r, 400)),
@@ -183,13 +340,21 @@ const sfx = {
     try { a.pause(); } catch { /* ignore */ }
   },
 
+  maybePreloadNextBgm() {
+    const a = this.bgm.el;
+    if (!a || !a.duration || !isFinite(a.duration)) return;
+    if (a.currentTime < Math.max(15, a.duration - 30)) return;
+    this.preloadNextBgm();
+  },
+
   preloadNextBgm() {
     const n = this.bgm.tracks;
     if (!n.length) return;
     const t = n[(this.bgm.index + 1) % n.length];
     if (!this._bgmPreload) this._bgmPreload = new Audio();
     this._bgmPreload.preload = "auto";
-    if (this._bgmPreload.src.slice(-t.src.length) !== t.src) this._bgmPreload.src = t.src;
+    if (this._bgmPreload._audioFile === t.file && this._bgmPreload.src) return;
+    bindAudioSources(this._bgmPreload, t.file);
   },
 
   bgmNext() {
@@ -198,10 +363,10 @@ const sfx = {
     const t = this.bgm.tracks[this.bgm.index];
     const a = this.bgm.el;
     if (!a) return;
-    a.src = t.src;
     a.volume = t.volume;
     a.preload = "auto";
-    this.preloadNextBgm();
+    bindAudioSources(a, t.file);
+    try { a.load(); } catch { /* ignore */ }
     if (this.bgm.wanted && this.live() && !rolling) this.resumeBgm();
   },
 
@@ -227,7 +392,6 @@ const sfx = {
   startBgm() {
     if (!this.live()) return;
     this.bgm.wanted = true;
-    this.preloadNextBgm();
     this.resumeBgm();
   },
 
@@ -288,7 +452,7 @@ const sfx = {
   },
 };
 
-sfx.init();
+if (ROLE !== "control") sfx.prepare();
 
 function syncSoundButton() {
   if (!ui.toggleSound) return;
@@ -1422,7 +1586,11 @@ async function boot() {
     document.addEventListener("touchstart", unlock, { passive: true });
   }
   connectWs();
-  await refresh();
+  try {
+    await refresh();
+  } finally {
+    sfx.prepare(state && state.audioCdn);
+  }
 }
 
 boot().catch((err) => toast(err.message));
