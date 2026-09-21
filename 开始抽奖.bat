@@ -15,6 +15,7 @@ echo 正在启动婚礼抽奖
 echo 大屏展示: http://localhost:3780/screen
 echo 手机控制: http://localhost:3780/control
 echo 宾客领号: http://localhost:3780
+echo 宾客扫码: http://816.gjsgj.com/
 start "" http://localhost:3780/screen
 node server.js
 pause

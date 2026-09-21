@@ -8,6 +8,7 @@ const { WebSocketServer } = require("ws");
 const QRCode = require("qrcode");
 
 const PORT = Number(process.env.PORT) || 3780;
+const DEFAULT_PUBLIC_URL = "http://816.gjsgj.com";
 const HOST_PASSWORD = "147258";
 const DATA_DIR = path.join(__dirname, "data");
 const STORE_PATH = path.join(DATA_DIR, "store.json");
@@ -811,13 +812,40 @@ function preferredLanIP() {
   return lanIPs().slice().sort((a, b) => score(a) - score(b))[0] || "localhost";
 }
 
-function publicPageUrl(req, pathname = "/") {
-  const rawHost = String((req && req.headers && req.headers.host) || "");
+function configuredPublicOrigin() {
+  const raw = process.env.PUBLIC_URL;
+  const value = raw == null || String(raw).trim() === ""
+    ? DEFAULT_PUBLIC_URL
+    : String(raw).trim();
+  if (/^(off|none|0|false|lan)$/i.test(value)) return "";
+  try {
+    return new URL(value).origin;
+  } catch {
+    return value.replace(/\/$/, "");
+  }
+}
+
+function requestOrigin(req) {
+  if (!req || !req.headers) return "";
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const forwardedHost = String(req.headers["x-forwarded-host"] || "").split(",")[0].trim();
+  const rawHost = forwardedHost || String(req.headers.host || "").split(",")[0].trim();
+  if (!rawHost) return "";
   const hostname = rawHost.split(":")[0];
   const local = !hostname || hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-  const host = local ? preferredLanIP() : hostname;
+  if (local) return "";
+  const proto = forwardedProto || "http";
+  return rawHost.includes(":") ? `${proto}://${rawHost}` : `${proto}://${hostname}`;
+}
+
+function publicOrigin(req) {
+  return configuredPublicOrigin() || requestOrigin(req) || `http://${preferredLanIP()}:${PORT}`;
+}
+
+function publicPageUrl(req, pathname = "/") {
   const path = pathname.startsWith("/") ? pathname : `/${pathname}`;
-  return `http://${host}:${PORT}${path}`;
+  const origin = publicOrigin(req);
+  return path === "/" ? `${origin}/` : `${origin}${path}`;
 }
 
 function guestPageUrl(req) {
@@ -853,17 +881,25 @@ process.on("unhandledRejection", (err) => {
   console.error("未处理的 Promise:", err);
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  const ips = lanIPs();
-  console.log(`婚礼抽奖服务已启动`);
-  const cdn = audioCdnList();
-  console.log(cdn.length ? `音频CDN: ${cdn.join("  ")}` : "音频CDN: 关闭（使用本站 /audio）");
-  console.log(`宾客领号: http://localhost:${PORT}/`);
-  console.log(`大屏展示: http://localhost:${PORT}/screen`);
-  console.log(`手机控制: http://localhost:${PORT}/control`);
-  for (const ip of ips) {
-    console.log(`宾客局域网: http://${ip}:${PORT}/`);
-    console.log(`大屏局域网: http://${ip}:${PORT}/screen`);
-    console.log(`控制局域网: http://${ip}:${PORT}/control`);
-  }
-});
+if (require.main === module) {
+  server.listen(PORT, "0.0.0.0", () => {
+    const ips = lanIPs();
+    console.log(`婚礼抽奖服务已启动`);
+    const cdn = audioCdnList();
+    console.log(cdn.length ? `音频CDN: ${cdn.join("  ")}` : "音频CDN: 关闭（使用本站 /audio）");
+    console.log(`宾客扫码: ${publicPageUrl(null, "/")}`);
+    console.log(`宾客领号: http://localhost:${PORT}/`);
+    console.log(`大屏展示: http://localhost:${PORT}/screen`);
+    console.log(`手机控制: http://localhost:${PORT}/control`);
+    for (const ip of ips) {
+      console.log(`宾客局域网: http://${ip}:${PORT}/`);
+      console.log(`大屏局域网: http://${ip}:${PORT}/screen`);
+      console.log(`控制局域网: http://${ip}:${PORT}/control`);
+    }
+  });
+}
+
+module.exports = {
+  publicPageUrl,
+  configuredPublicOrigin,
+};
