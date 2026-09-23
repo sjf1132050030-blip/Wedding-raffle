@@ -1265,6 +1265,7 @@ function openSettings() {
   fillSettings(state);
   ui.settings.classList.remove("hidden");
   if (ui.scrim) ui.scrim.classList.remove("hidden");
+  loadQuizEditor();
 }
 function closeSettings() {
   if (ui.settings) ui.settings.classList.add("hidden");
@@ -1288,6 +1289,8 @@ if (ui.hostLogin) {
     try {
       await api("/api/host/login", { password });
       ui.hostGate.classList.add("hidden");
+      await refresh();
+      if (state && state.program === "quiz") await refreshQuizManage();
       toast("控制台已解锁");
     } catch (err) {
       if (ui.hostGateErr) ui.hostGateErr.textContent = err.message;
@@ -1629,13 +1632,26 @@ function renderQuiz(s) {
   updateQuizClocks();
 }
 
+function quizProgressKey(s) {
+  const progress = s && s.quiz && s.quiz.progress;
+  return progress ? `${progress.current}/${progress.total}` : "";
+}
+
+function quizKicker(quiz) {
+  const progress = quiz && quiz.progress;
+  if (progress && progress.current && progress.total) return `第 ${progress.current} / ${progress.total} 题`;
+  return "有奖竞答";
+}
+
 function quizViewSignature(s) {
   const round = s.quiz && s.quiz.round;
-  if (!round) return "none";
+  const progress = quizProgressKey(s);
+  if (!round) return `none~${progress}`;
   const mine = quizMine && quizMine.roundId === round.id ? quizMine : null;
   const winner = s.quiz.winner;
   const opt = (round.options || []).map((o) => `${o.key}:${o.text}:${o.correct ? 1 : 0}`).join("|");
   return [
+    progress,
     round.id,
     round.status,
     round.question,
@@ -1652,15 +1668,16 @@ function paintQuizStage(s) {
   if (!box) return;
   const quiz = s.quiz || {};
   const round = quiz.round;
+  const kicker = `<p class="quiz-kicker">${escapeHtml(quizKicker(quiz))}</p>`;
   if (!round) {
-    box.innerHTML = `<p class="quiz-kicker">有奖竞答</p><p class="quiz-question">等待主持人出题</p>`;
+    box.innerHTML = `${kicker}<p class="quiz-question">等待主持人出题</p>`;
     return;
   }
   const mine = quizMine && quizMine.roundId === round.id ? quizMine : null;
   const prize = `<p class="quiz-prize">奖品：${escapeHtml(round.prize || "")}</p>`;
   const question = `<p class="quiz-question">${escapeHtml(round.question || "")}</p>`;
   if (round.status === "reading") {
-    box.innerHTML = `<p class="quiz-kicker">有奖竞答</p>${prize}${question}<p class="hint">请听主持人读题，选项稍后放出</p>`;
+    box.innerHTML = `${kicker}${prize}${question}<p class="hint">请听主持人读题，选项稍后放出</p>`;
     return;
   }
   const locked = Boolean(mine) || round.status !== "open" || myNumber == null;
@@ -1697,7 +1714,7 @@ function paintQuizStage(s) {
   const owned = wonBefore && ROLE === "guest"
     ? `<p class="tiny">你已获得过竞答奖品：${escapeHtml(wonBefore.prize || "")}。再第一名答对也不会重复领奖。</p>`
     : "";
-  box.innerHTML = `<p class="quiz-kicker">有奖竞答</p>${prize}${question}${clock}<div class="quiz-options">${options}</div>${extra}${owned}`;
+  box.innerHTML = `${kicker}${prize}${question}${clock}<div class="quiz-options">${options}</div>${extra}${owned}`;
 }
 
 function renderQuizLive() {
@@ -1705,14 +1722,35 @@ function renderQuizLive() {
   const hint = $("quizPhaseHint");
   const release = $("quizRelease");
   const closeBtn = $("quizClose");
+  const publish = $("quizPublish");
+  const items = (quizManage && quizManage.items) || [];
+  const playedIds = (quizManage && quizManage.played) || [];
+  const played = new Set(playedIds);
+  const nextItem = items.find((item) => !played.has(item.id)) || null;
+  const nextIndex = nextItem ? items.findIndex((item) => item.id === nextItem.id) + 1 : 0;
   if (release) release.disabled = !round || round.status !== "reading";
   if (closeBtn) closeBtn.disabled = !round || round.status === "closed";
+  if (publish) {
+    const lastLive = Boolean(round && round.status !== "closed" && !nextItem && items.length);
+    publish.disabled = Boolean(quizManage) && !nextItem;
+    publish.textContent = !quizManage
+      ? "公布题目"
+      : nextItem
+        ? `公布第 ${nextIndex} 题`
+        : lastLive
+          ? "本题是最后一题"
+          : (items.length ? "题目已全部出完" : "请先配置题目");
+  }
   if (hint) {
-    if (!round) hint.textContent = "先填写题目和选项，再公布题目。公布后嘉宾只能看到题目，还不能选择。";
+    if (!quizManage) hint.textContent = "正在读取已经配好的题目。";
+    else if (!items.length) hint.textContent = "还没有题目。打开「抽奖设置」，把全部竞答题目按顺序配好并保存。";
+    else if (!round) hint.textContent = "题目已备好。公布后嘉宾只能看到题目，还不能选择。";
     else if (round.status === "reading") hint.textContent = "题目已公布。念完后点「放出选项」，嘉宾才能作答，计时从这时开始。";
     else if (round.status === "open") hint.textContent = "选项已放出，正在计时。奖品给第一位答对、且还没领过竞答奖的宾客。";
-    else hint.textContent = "本题已结束。可以公布下一题，或回到抽奖。";
+    else if (nextItem) hint.textContent = "本题已结束。点公布下一题，继续按设定顺序出题。";
+    else hint.textContent = "全部题目已出完。可以回到抽奖。";
   }
+  renderQuizNow(round, items, played, nextItem);
   const live = $("quizLive");
   if (!live) return;
   const managedRound = quizManage && quizManage.round;
@@ -1752,35 +1790,223 @@ async function refreshQuizManage() {
   }
 }
 
-function buildQuizEditor() {
-  const box = $("quizOptions");
-  if (!box || box.dataset.ready) return;
-  box.dataset.ready = "1";
-  box.innerHTML = ["A", "B", "C", "D", "E"].map((key) => `
-    <div class="quiz-opt-edit">
-      <label><input type="checkbox" data-quiz-on="${key}" ${key < "E" ? "checked" : ""} /> ${key}</label>
-      <input type="text" data-quiz-text="${key}" maxlength="80" placeholder="选项${key}" />
-      <label><input type="checkbox" data-quiz-ok="${key}" /> 正确</label>
+function renderQuizNow(round, items, played, nextItem) {
+  const box = $("quizNow");
+  if (!box) return;
+  const managed = quizManage && quizManage.round;
+  const same = Boolean(managed && round && managed.id === round.id);
+  let heading = "";
+  let question = "";
+  let prize = "";
+  let options = [];
+  let answers = [];
+  if (round && round.status !== "closed") {
+    const index = same && managed.itemId
+      ? items.findIndex((item) => item.id === managed.itemId) + 1
+      : ((state.quiz.progress && state.quiz.progress.current) || 0);
+    const total = items.length || (state.quiz.progress && state.quiz.progress.total) || 0;
+    const phase = round.status === "reading" ? "读题中" : "作答中";
+    heading = index && total ? `第 ${index} / ${total} 题 · ${phase}` : phase;
+    question = round.question || "";
+    prize = round.prize || "";
+    options = same ? managed.options : (round.options || []);
+    answers = same ? managed.answers : [];
+  } else if (nextItem) {
+    const index = items.findIndex((item) => item.id === nextItem.id) + 1;
+    heading = `下一题 ${index} / ${items.length} · 还没公布`;
+    question = nextItem.question || "";
+    prize = nextItem.prize || "";
+    options = nextItem.options || [];
+    answers = nextItem.answers || [];
+  } else if (items.length) {
+    heading = "题目已全部出完";
+    question = round ? round.question || "" : "";
+    prize = round ? round.prize || "" : "";
+    options = same ? managed.options : [];
+    answers = same ? managed.answers : [];
+  } else if (quizManage) {
+    heading = "还没有题目";
+    question = "打开「抽奖设置」，先把题目按顺序配好并保存。";
+  } else {
+    heading = "正在读取题目";
+  }
+  const answerSet = new Set(answers || []);
+  const optionText = (options || []).map((option) => {
+    const mark = answerSet.has(option.key) ? "（正确）" : "";
+    return `${option.key}. ${option.text}${mark}`;
+  }).join("\n");
+  const plan = items.map((item, index) => {
+    let label = "待公布";
+    let cls = "";
+    if (round && same && managed.itemId === item.id && round.status !== "closed") {
+      label = round.status === "reading" ? "读题中" : "作答中";
+      cls = "now";
+    } else if (played.has(item.id)) {
+      label = "已出过";
+      cls = "done";
+    } else if (nextItem && nextItem.id === item.id) {
+      label = "下一题";
+      cls = "now";
+    }
+    const brief = String(item.question || "").replace(/\s+/g, " ").slice(0, 28);
+    return `<li class="${cls}">${index + 1}. ${escapeHtml(brief)} · ${escapeHtml(item.prize || "")} · ${label}</li>`;
+  }).join("");
+  box.innerHTML = `
+    <div class="quiz-now">
+      <p class="tiny">${escapeHtml(heading)}</p>
+      ${question ? `<p class="quiz-now-question">${escapeHtml(question)}</p>` : ""}
+      ${prize ? `<p class="tiny">奖品：${escapeHtml(prize)}</p>` : ""}
+      ${optionText ? `<p class="quiz-now-options">${escapeHtml(optionText)}</p>` : ""}
     </div>
-  `).join("");
+    ${plan ? `<ol class="quiz-plan">${plan}</ol>` : ""}
+  `;
 }
 
-function readQuizSetup() {
-  const question = $("quizQuestion") ? $("quizQuestion").value.trim() : "";
-  const prize = $("quizPrize") ? $("quizPrize").value.trim() : "";
-  const options = [];
-  for (const key of ["A", "B", "C", "D", "E"]) {
-    const on = document.querySelector(`[data-quiz-on="${key}"]`);
-    const text = document.querySelector(`[data-quiz-text="${key}"]`);
-    const correct = document.querySelector(`[data-quiz-ok="${key}"]`);
-    if (!on || !on.checked) continue;
-    options.push({
+let editQuizItems = [];
+let editQuizPlayed = new Set();
+let quizEditorReady = false;
+let quizEditorReq = 0;
+
+function newQuizDraft() {
+  return {
+    id: `qi_${Math.random().toString(16).slice(2, 8)}`,
+    question: "",
+    prize: "",
+    letters: ["A", "B", "C", "D", "E"].map((key) => ({
       key,
-      text: text ? text.value.trim() : "",
-      correct: Boolean(correct && correct.checked),
-    });
+      on: key !== "E",
+      text: "",
+      correct: false,
+    })),
+  };
+}
+
+function quizItemToEditor(item) {
+  const answers = new Set(item.answers || []);
+  const byKey = new Map((item.options || []).map((option) => [option.key, option]));
+  return {
+    id: item.id,
+    question: item.question || "",
+    prize: item.prize || "",
+    letters: ["A", "B", "C", "D", "E"].map((key) => ({
+      key,
+      on: byKey.has(key),
+      text: byKey.has(key) ? byKey.get(key).text : "",
+      correct: answers.has(key),
+    })),
+  };
+}
+
+function renderQuizEditor() {
+  const box = $("quizEditor");
+  if (!box) return;
+  if (!editQuizItems.length) {
+    box.innerHTML = `<p class="tiny">还没有题目。点下面的「添加题目」，按出场顺序加好后保存。</p>`;
+    return;
   }
-  return { question, prize, options };
+  box.innerHTML = editQuizItems.map((item, index) => {
+    const played = editQuizPlayed.has(item.id);
+    const disabled = played ? "disabled" : "";
+    const prevPlayed = index > 0 && editQuizPlayed.has(editQuizItems[index - 1].id);
+    const nextPlayed = index + 1 < editQuizItems.length && editQuizPlayed.has(editQuizItems[index + 1].id);
+    const letters = item.letters.map((letter) => `
+      <div class="quiz-opt-edit">
+        <label><input type="checkbox" data-letter="${letter.key}" data-field="on" ${letter.on ? "checked" : ""} ${disabled} /> ${letter.key}</label>
+        <input type="text" data-letter="${letter.key}" data-field="text" maxlength="80" value="${escapeAttr(letter.text)}" placeholder="选项${letter.key}" ${disabled} />
+        <label><input type="checkbox" data-letter="${letter.key}" data-field="correct" ${letter.correct ? "checked" : ""} ${disabled} /> 正确</label>
+      </div>
+    `).join("");
+    const tools = played
+      ? `<p class="tiny">已出过，不能再改</p>`
+      : `<div class="quiz-item-tools">
+          <button class="ghost" type="button" data-quiz-up="${item.id}" ${index === 0 || prevPlayed ? "disabled" : ""}>上移</button>
+          <button class="ghost" type="button" data-quiz-down="${item.id}" ${index === editQuizItems.length - 1 || nextPlayed ? "disabled" : ""}>下移</button>
+          <button class="ghost" type="button" data-quiz-del="${item.id}">删除</button>
+        </div>`;
+    return `
+      <section class="quiz-item-editor${played ? " is-played" : ""}" data-quiz-item="${item.id}">
+        <div class="quiz-item-head">
+          <strong>第 ${index + 1} 题</strong>
+          ${played ? `<span class="tiny">已出题</span>` : ""}
+        </div>
+        <label>题目
+          <textarea data-field="question" maxlength="200" rows="3" placeholder="主持人要念的题目" ${disabled}>${escapeHtml(item.question)}</textarea>
+        </label>
+        <label>奖品
+          <input type="text" data-field="prize" maxlength="30" value="${escapeAttr(item.prize)}" placeholder="例如 红包" ${disabled} />
+        </label>
+        ${letters}
+        <p class="tiny">勾选要出现的选项。标成正确的可以有多个，宾客必须全部选对。</p>
+        ${tools}
+      </section>
+    `;
+  }).join("");
+}
+
+async function loadQuizEditor() {
+  if (!CAN_CONTROL || !$("quizEditor")) return;
+  const seq = ++quizEditorReq;
+  quizEditorReady = false;
+  const saveBtn = $("saveQuizBank");
+  if (saveBtn) saveBtn.disabled = true;
+  try {
+    const data = await api("/api/quiz/manage");
+    if (seq !== quizEditorReq) return;
+    editQuizItems = (data.items || []).map(quizItemToEditor);
+    editQuizPlayed = new Set(data.played || []);
+    quizEditorReady = true;
+    if (saveBtn) saveBtn.disabled = false;
+    renderQuizEditor();
+  } catch (err) {
+    if (seq === quizEditorReq) toast(err.message || "竞答题目没有读出来");
+  }
+}
+
+function moveQuizItem(id, dir) {
+  const index = editQuizItems.findIndex((item) => item.id === id);
+  const next = index + dir;
+  if (index < 0 || next < 0 || next >= editQuizItems.length) return;
+  if (editQuizPlayed.has(id) || editQuizPlayed.has(editQuizItems[next].id)) return;
+  const [item] = editQuizItems.splice(index, 1);
+  editQuizItems.splice(next, 0, item);
+  renderQuizEditor();
+}
+
+async function saveQuizBank() {
+  if (!CAN_CONTROL) return;
+  if (!quizEditorReady) {
+    toast("题目还在读取，请稍后再保存");
+    return;
+  }
+  const items = editQuizItems.map((item) => ({
+    id: item.id,
+    question: item.question.trim(),
+    prize: item.prize.trim(),
+    options: item.letters.filter((letter) => letter.on).map((letter) => ({
+      key: letter.key,
+      text: letter.text.trim(),
+      correct: Boolean(letter.correct),
+    })),
+  }));
+  try {
+    applyState(await api("/api/quiz/bank", { items }));
+    await loadQuizEditor();
+    toast("竞答题目已保存");
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+async function resetQuizProgress() {
+  if (!CAN_CONTROL) return;
+  if (!confirm("清空已出题目和答题记录？配好的题目会保留，下次从第一题重新开始。")) return;
+  try {
+    applyState(await api("/api/quiz/reset", {}));
+    await loadQuizEditor();
+    toast("竞答进度已清空，题目还在");
+  } catch (err) {
+    toast(err.message);
+  }
 }
 
 async function setProgram(mode) {
@@ -1788,6 +2014,7 @@ async function setProgram(mode) {
   try {
     setBusy(true);
     applyState(await api("/api/program", { mode }));
+    if (mode === "quiz") await refreshQuizManage();
     closeSettings();
     toast(mode === "quiz" ? "已进入有奖竞答，抽奖进度保留" : "已回到抽奖，从上次继续");
   } catch (err) {
@@ -1801,11 +2028,12 @@ async function publishQuiz() {
   if (!CAN_CONTROL || busy) return;
   const round = state && state.quiz && state.quiz.round;
   if (round && round.status !== "closed") {
-    if (!confirm("当前题目还没结束。公布新题会结束上一题，确定吗？")) return;
+    if (!confirm("当前题目还没结束。公布下一题会结束上一题，确定吗？")) return;
   }
   try {
     setBusy(true);
-    applyState(await api("/api/quiz/open", readQuizSetup()));
+    applyState(await api("/api/quiz/open", {}));
+    await refreshQuizManage();
     toast("题目已公布。念完后请点放出选项");
   } catch (err) {
     toast(err.message);
@@ -1819,6 +2047,7 @@ async function releaseQuiz() {
   try {
     setBusy(true);
     applyState(await api("/api/quiz/release", {}));
+    await refreshQuizManage();
     toast("选项已放出，开始计时");
   } catch (err) {
     toast(err.message);
@@ -1832,6 +2061,7 @@ async function closeQuiz() {
   try {
     setBusy(true);
     applyState(await api("/api/quiz/close", {}));
+    await refreshQuizManage();
     toast("本题已结束");
   } catch (err) {
     toast(err.message);
@@ -1880,13 +2110,50 @@ async function submitQuiz() {
   }
 }
 
-buildQuizEditor();
 onEl($("enterQuiz"), "click", () => setProgram("quiz"));
 onEl($("backToLottery"), "click", () => setProgram("lottery"));
 onEl($("quizPublish"), "click", () => publishQuiz());
 onEl($("quizRelease"), "click", () => releaseQuiz());
 onEl($("quizClose"), "click", () => closeQuiz());
 onEl($("quizBack"), "click", () => setProgram("lottery"));
+onEl($("addQuizItem"), "click", () => {
+  if (!quizEditorReady) {
+    toast("题目还在读取，请稍后再添加");
+    return;
+  }
+  editQuizItems.push(newQuizDraft());
+  renderQuizEditor();
+});
+onEl($("saveQuizBank"), "click", () => saveQuizBank());
+onEl($("resetQuizProgress"), "click", () => resetQuizProgress());
+onEl($("quizEditor"), "input", (e) => {
+  const card = e.target.closest("[data-quiz-item]");
+  if (!card) return;
+  const item = editQuizItems.find((entry) => entry.id === card.dataset.quizItem);
+  if (!item || editQuizPlayed.has(item.id)) return;
+  if (e.target.dataset.field === "question") item.question = e.target.value;
+  if (e.target.dataset.field === "prize") item.prize = e.target.value;
+  const key = e.target.dataset.letter;
+  if (!key) return;
+  const letter = item.letters.find((entry) => entry.key === key);
+  if (!letter) return;
+  if (e.target.dataset.field === "on") letter.on = e.target.checked;
+  if (e.target.dataset.field === "text") letter.text = e.target.value;
+  if (e.target.dataset.field === "correct") letter.correct = e.target.checked;
+});
+onEl($("quizEditor"), "click", (e) => {
+  const up = e.target.closest("[data-quiz-up]");
+  const down = e.target.closest("[data-quiz-down]");
+  const del = e.target.closest("[data-quiz-del]");
+  if (up) moveQuizItem(up.dataset.quizUp, -1);
+  if (down) moveQuizItem(down.dataset.quizDown, 1);
+  if (del) {
+    const id = del.dataset.quizDel;
+    if (editQuizPlayed.has(id)) return;
+    editQuizItems = editQuizItems.filter((item) => item.id !== id);
+    renderQuizEditor();
+  }
+});
 onEl($("quizStage"), "click", (e) => {
   const choice = e.target.closest("[data-quiz-choice]");
   if (choice && !choice.disabled) {

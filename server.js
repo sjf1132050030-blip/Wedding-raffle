@@ -78,7 +78,7 @@ function idleSession() {
 const QUIZ_LETTERS = ["A", "B", "C", "D", "E"];
 
 function idleQuiz() {
-  return { round: null, submissions: [], awards: [] };
+  return { items: [], played: [], round: null, submissions: [], awards: [] };
 }
 
 function idleController() {
@@ -214,6 +214,20 @@ function normalizeStore(store) {
 function normalizeQuiz(raw) {
   const quiz = idleQuiz();
   if (!raw || typeof raw !== "object") return quiz;
+  const seenIds = new Set();
+  for (const rawItem of Array.isArray(raw.items) ? raw.items : []) {
+    const item = coerceQuizItem(rawItem);
+    if (!item || seenIds.has(item.id)) continue;
+    seenIds.add(item.id);
+    quiz.items.push(item);
+  }
+  const playedSeen = new Set();
+  for (const id of Array.isArray(raw.played) ? raw.played : []) {
+    const key = String(id || "");
+    if (!seenIds.has(key) || playedSeen.has(key)) continue;
+    playedSeen.add(key);
+    quiz.played.push(key);
+  }
   const round = raw.round;
   if (round && round.question) {
     const options = [];
@@ -232,8 +246,10 @@ function normalizeQuiz(raw) {
         .filter((key) => seen.has(key))
     )];
     if (options.length >= 2 && answers.length) {
+      const itemId = String(round.itemId || "");
       quiz.round = {
         id: String(round.id || uid("q")),
+        itemId,
         question: String(round.question).trim().slice(0, 200),
         prize: String(round.prize || "竞答奖品").trim().slice(0, 30) || "竞答奖品",
         options,
@@ -242,6 +258,10 @@ function normalizeQuiz(raw) {
         elapsedBefore: Math.max(0, Number(round.elapsedBefore) || 0),
         runningSince: round.status === "open" ? (Number(round.runningSince) || null) : null,
       };
+      if (itemId && seenIds.has(itemId) && !playedSeen.has(itemId)) {
+        playedSeen.add(itemId);
+        quiz.played.push(itemId);
+      }
     }
   }
   const roundIds = new Set(quiz.round ? [quiz.round.id] : []);
@@ -318,6 +338,10 @@ function sameChoiceSet(left, right) {
   return left.every((key) => wanted.has(key));
 }
 
+function sortQuizAnswers(answers) {
+  return answers.slice().sort((a, b) => QUIZ_LETTERS.indexOf(a) - QUIZ_LETTERS.indexOf(b));
+}
+
 function parseQuizSetup(body) {
   const question = String(body.question || "").trim().slice(0, 200);
   const prize = String(body.prize || "").trim().slice(0, 30);
@@ -339,7 +363,120 @@ function parseQuizSetup(body) {
   options.sort((a, b) => QUIZ_LETTERS.indexOf(a.key) - QUIZ_LETTERS.indexOf(b.key));
   if (options.length < 2) fail(400, "至少保留两个选项");
   if (!answers.length) fail(400, "请至少勾选一个正确答案");
-  return { question, prize, options, answers };
+  return { question, prize, options, answers: sortQuizAnswers(answers) };
+}
+
+function coerceQuizItem(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const question = String(raw.question || "").trim().slice(0, 200);
+  const prize = String(raw.prize || "").trim().slice(0, 30);
+  if (!question || !prize) return null;
+  const options = [];
+  const seen = new Set();
+  for (const item of Array.isArray(raw.options) ? raw.options : []) {
+    const key = String(item && item.key || "").trim().toUpperCase();
+    const text = String(item && item.text || "").trim().slice(0, 80);
+    if (!QUIZ_LETTERS.includes(key) || seen.has(key) || !text) continue;
+    seen.add(key);
+    options.push({ key, text });
+  }
+  options.sort((a, b) => QUIZ_LETTERS.indexOf(a.key) - QUIZ_LETTERS.indexOf(b.key));
+  let answers = [...new Set(
+    (Array.isArray(raw.answers) ? raw.answers : [])
+      .map((key) => String(key || "").trim().toUpperCase())
+      .filter((key) => seen.has(key))
+  )];
+  if (!answers.length) {
+    answers = [...new Set(
+      (Array.isArray(raw.options) ? raw.options : [])
+        .filter((item) => item && item.correct)
+        .map((item) => String(item.key || "").trim().toUpperCase())
+        .filter((key) => seen.has(key))
+    )];
+  }
+  if (options.length < 2 || !answers.length) return null;
+  const id = String(raw.id || "").trim().slice(0, 40);
+  if (id && !/^[\w-]+$/.test(id)) return null;
+  return { id: id || uid("qi"), question, prize, options, answers: sortQuizAnswers(answers) };
+}
+
+function parseQuizItem(body) {
+  const setup = parseQuizSetup(body || {});
+  const id = String((body && body.id) || "").trim().slice(0, 40);
+  if (id && !/^[\w-]+$/.test(id)) fail(400, "题目编号无效");
+  return { id: id || uid("qi"), ...setup };
+}
+
+function sameQuizItem(left, right) {
+  if (!left || !right) return false;
+  if (left.question !== right.question || left.prize !== right.prize) return false;
+  if (left.options.length !== right.options.length) return false;
+  if (!left.options.every((option, index) => option.key === right.options[index].key && option.text === right.options[index].text)) {
+    return false;
+  }
+  return sameChoiceSet(left.answers, right.answers);
+}
+
+function saveQuizBank(store, rawItems) {
+  const quiz = store.quiz || idleQuiz();
+  store.quiz = quiz;
+  if (!Array.isArray(quiz.items)) quiz.items = [];
+  if (!Array.isArray(quiz.played)) quiz.played = [];
+  if (!Array.isArray(rawItems)) fail(400, "题目格式不对");
+  if (rawItems.length > 40) fail(400, "最多配置 40 道题");
+  const items = rawItems.map((item, index) => {
+    try {
+      return parseQuizItem(item);
+    } catch (err) {
+      err.message = `第 ${index + 1} 题：${err.message}`;
+      throw err;
+    }
+  });
+  const ids = new Set();
+  for (const item of items) {
+    if (ids.has(item.id)) fail(400, "题目编号重复");
+    ids.add(item.id);
+  }
+  const prevById = new Map(quiz.items.map((item) => [item.id, item]));
+  for (const id of quiz.played) {
+    if (!ids.has(id)) fail(400, "已经出过的题目不能删除");
+  }
+  for (let i = 0; i < quiz.played.length; i += 1) {
+    const id = quiz.played[i];
+    if (!items[i] || items[i].id !== id) fail(400, "已经出过的题目不能调换顺序");
+    if (!sameQuizItem(items[i], prevById.get(id))) fail(400, "已经出过的题目不能修改");
+  }
+  quiz.items = items;
+}
+
+function openNextQuizRound(store, now = Date.now()) {
+  if (store.program !== "quiz") fail(400, "请先进入有奖竞答");
+  const quiz = store.quiz || idleQuiz();
+  store.quiz = quiz;
+  if (!Array.isArray(quiz.items)) quiz.items = [];
+  if (!Array.isArray(quiz.played)) quiz.played = [];
+  const played = new Set(quiz.played);
+  const item = quiz.items.find((entry) => !played.has(entry.id));
+  if (!item) fail(400, quiz.items.length ? "题目已经出完" : "请先在设置里配置竞答题目");
+  closeQuizRound(quiz, now);
+  quiz.played.push(item.id);
+  quiz.round = {
+    id: uid("q"),
+    itemId: item.id,
+    question: item.question,
+    prize: item.prize,
+    options: item.options.map((option) => ({ key: option.key, text: option.text })),
+    answers: item.answers.slice(),
+    status: "reading",
+    elapsedBefore: 0,
+    runningSince: null,
+  };
+}
+
+function resetQuizProgress(store) {
+  const items = store.quiz && Array.isArray(store.quiz.items) ? store.quiz.items : [];
+  store.quiz = idleQuiz();
+  store.quiz.items = items;
 }
 
 function parseQuizChoices(raw, allowed) {
@@ -369,10 +506,22 @@ function publicQuiz(store, now = Date.now()) {
   const answerCount = round
     ? quiz.submissions.filter((item) => item.roundId === round.id).length
     : 0;
+  const items = Array.isArray(quiz.items) ? quiz.items : [];
+  let current = 0;
+  if (round && round.itemId) {
+    const index = items.findIndex((item) => item.id === round.itemId);
+    if (index >= 0) current = index + 1;
+  }
   return {
+    progress: {
+      current,
+      total: items.length,
+      done: Array.isArray(quiz.played) ? quiz.played.length : 0,
+    },
     round: round
       ? {
           id: round.id,
+          itemId: round.itemId || "",
           question: round.question,
           prize: round.prize,
           status: round.status,
@@ -418,9 +567,12 @@ function hostQuizView(store) {
     : [];
   return {
     program: store.program,
+    items: quiz.items || [],
+    played: quiz.played || [],
     round: round
       ? {
           id: round.id,
+          itemId: round.itemId || "",
           question: round.question,
           prize: round.prize,
           status: round.status,
@@ -1073,11 +1225,14 @@ app.post("/api/reset", (req, res, next) => {
     }
     store.draws = [];
     store.session = idleSession();
-    if (restoreDefaults || clearGuests) {
+    if (restoreDefaults) {
       store.guests = [];
       store.quiz = idleQuiz();
+      store.program = "lottery";
+    } else if (clearGuests) {
+      store.guests = [];
+      resetQuizProgress(store);
     }
-    if (restoreDefaults) store.program = "lottery";
     return publicState(store);
   });
 });
@@ -1105,22 +1260,23 @@ app.get("/api/quiz/manage", (req, res) => {
   res.json(hostQuizView(store));
 });
 
+app.post("/api/quiz/bank", (req, res, next) => {
+  mutateHost(req, res, next, (store) => {
+    saveQuizBank(store, req.body && req.body.items);
+    return publicState(store);
+  });
+});
+
+app.post("/api/quiz/reset", (req, res, next) => {
+  mutateHost(req, res, next, (store) => {
+    resetQuizProgress(store);
+    return publicState(store);
+  });
+});
+
 app.post("/api/quiz/open", (req, res, next) => {
   mutateHost(req, res, next, (store) => {
-    if (store.program !== "quiz") fail(400, "请先进入有奖竞答");
-    const setup = parseQuizSetup(req.body || {});
-    const now = Date.now();
-    closeQuizRound(store.quiz, now);
-    store.quiz.round = {
-      id: uid("q"),
-      question: setup.question,
-      prize: setup.prize,
-      options: setup.options,
-      answers: setup.answers,
-      status: "reading",
-      elapsedBefore: 0,
-      runningSince: null,
-    };
+    openNextQuizRound(store, Date.now());
     return publicState(store);
   });
 });
@@ -1368,6 +1524,87 @@ function runQuizSelfTest() {
   const frozen = quizElapsed(store.quiz.round, 90000);
   assert(frozen === 6000, "回到抽奖后计时暂停");
   assert(store.session.phase === "drawing" && store.session.currentBatch[0] === 7, "竞答过程不重置抽奖");
+
+  const bankStore = { program: "quiz", quiz: idleQuiz() };
+  let needConfig = false;
+  try {
+    openNextQuizRound(bankStore, 1);
+  } catch (err) {
+    needConfig = /配置/.test(err.message);
+  }
+  assert(needConfig, "没配题目不能公布");
+  saveQuizBank(bankStore, [
+    {
+      id: "qa_one",
+      question: "第一题",
+      prize: "红包",
+      options: [
+        { key: "A", text: "甲", correct: true },
+        { key: "B", text: "乙", correct: false },
+      ],
+    },
+    {
+      id: "qa_two",
+      question: "第二题",
+      prize: "香囊",
+      options: [
+        { key: "A", text: "甲", correct: false },
+        { key: "B", text: "乙", correct: true },
+      ],
+    },
+  ]);
+  openNextQuizRound(bankStore, 1000);
+  assert(bankStore.quiz.round.question === "第一题" && bankStore.quiz.round.status === "reading", "按顺序公布第一题");
+  assert(bankStore.quiz.played[0] === "qa_one", "出过的题目记下来");
+  const hiddenBank = publicQuiz(bankStore, 1000);
+  assert(hiddenBank.progress.current === 1 && hiddenBank.progress.total === 2, "公开进度只有题号");
+  assert(!Object.prototype.hasOwnProperty.call(hiddenBank, "items"), "公开状态不含题库");
+  assert(!JSON.stringify(hiddenBank).includes("香囊"), "还没轮到的题目不能出现在公开状态");
+  const kept = bankStore.quiz.items.map((item) => ({
+    id: item.id,
+    question: item.question,
+    prize: item.prize,
+    options: item.options.map((option) => ({
+      key: option.key,
+      text: option.text,
+      correct: item.answers.includes(option.key),
+    })),
+  }));
+  kept[1].question = "第二题改过";
+  saveQuizBank(bankStore, kept);
+  assert(bankStore.quiz.items[1].question === "第二题改过", "还没出的题可以改");
+  let lockedItem = false;
+  try {
+    const bad = kept.map((item) => ({ ...item, options: item.options.map((option) => ({ ...option })) }));
+    bad[0].question = "改掉第一题";
+    saveQuizBank(bankStore, bad);
+  } catch (err) {
+    lockedItem = /不能修改/.test(err.message);
+  }
+  assert(lockedItem && bankStore.quiz.items[0].question === "第一题", "已经出过的题目不能改");
+  openNextQuizRound(bankStore, 2000);
+  assert(bankStore.quiz.round.question === "第二题改过" && bankStore.quiz.round.status === "reading", "下一题用改过的内容");
+  assert(bankStore.quiz.played.length === 2, "两题都按顺序出过");
+  let finished = false;
+  try {
+    openNextQuizRound(bankStore, 3000);
+  } catch (err) {
+    finished = /出完/.test(err.message);
+  }
+  assert(finished, "题目出完就不能再公布");
+  resetQuizProgress(bankStore);
+  assert(bankStore.quiz.items.length === 2 && bankStore.quiz.played.length === 0 && !bankStore.quiz.round, "清空进度仍保留题目");
+  const restored = normalizeQuiz({
+    items: [{
+      id: "qa_keep",
+      question: "存档题",
+      prize: "对杯",
+      options: [{ key: "A", text: "甲" }, { key: "B", text: "乙" }],
+      answers: ["A"],
+    }],
+    played: ["qa_keep", "missing"],
+  });
+  assert(restored.items.length === 1 && restored.played.length === 1 && restored.items[0].answers[0] === "A", "题库能从存档读出");
   console.log("quiz self-test ok");
 }
 

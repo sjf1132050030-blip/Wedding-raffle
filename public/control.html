@@ -36,15 +36,8 @@
 
     <section class="quiz-panel" id="quizPanel">
       <p class="eyebrow">有奖竞答</p>
-      <p class="hint" id="quizPhaseHint">先填写题目和选项，再公布题目。公布后嘉宾只能看到题目。</p>
-      <label class="quiz-field">题目
-        <textarea id="quizQuestion" maxlength="200" rows="3" placeholder="主持人要念的题目"></textarea>
-      </label>
-      <label class="quiz-field">奖品
-        <input id="quizPrize" maxlength="30" placeholder="例如 红包" />
-      </label>
-      <div id="quizOptions"></div>
-      <p class="tiny">勾选要出现的 A–E。标成正确的可以有多个，宾客必须全部选对。改完题目或选项后，需要重新公布。</p>
+      <p class="hint" id="quizPhaseHint">题目要提前在抽奖设置里配好。现场按顺序公布，不用再临场填写。</p>
+      <div id="quizNow"></div>
       <div class="quiz-actions">
         <button class="btn gold" id="quizPublish" type="button">公布题目</button>
         <button class="btn gold" id="quizRelease" type="button">放出选项</button>
@@ -153,6 +146,16 @@
       </div>
       <p class="tiny" id="settingsNote"></p>
     </form>
+    <div class="drawer-body quiz-bank-box" id="quizBankBox">
+      <h3>有奖竞答题目</h3>
+      <p class="tiny">提前把题目、选项、正确答案和奖品按出场顺序配好。现场只按这个顺序一题一题公布。已经出过的题目不能再改；抽奖开始后，还没出的题目仍可修改。</p>
+      <div id="quizEditor"></div>
+      <button class="btn outline" id="addQuizItem" type="button">添加题目</button>
+      <div class="drawer-actions">
+        <button class="btn gold" id="saveQuizBank" type="button">保存竞答题目</button>
+        <button class="btn" id="resetQuizProgress" type="button">清空竞答进度</button>
+      </div>
+    </div>
   </aside>
   <div class="scrim hidden" id="scrim"></div>
   <div class="toast hidden" id="toast"></div>
