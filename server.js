@@ -75,6 +75,12 @@ function idleSession() {
   };
 }
 
+const QUIZ_LETTERS = ["A", "B", "C", "D", "E"];
+
+function idleQuiz() {
+  return { round: null, submissions: [], awards: [] };
+}
+
 function idleController() {
   return { token: null, lockedAt: null };
 }
@@ -94,6 +100,8 @@ function defaultStore() {
     guests: [],
     controller: idleController(),
     session: idleSession(),
+    program: "lottery",
+    quiz: idleQuiz(),
   };
 }
 
@@ -198,7 +206,297 @@ function normalizeStore(store) {
   };
 
   const session = { ...idleSession(), ...(store.session || {}) };
-  return { config, levels, prizes, draws, guests, controller, session };
+  const program = store.program === "quiz" ? "quiz" : "lottery";
+  const quiz = normalizeQuiz(store.quiz);
+  return { config, levels, prizes, draws, guests, controller, session, program, quiz };
+}
+
+function normalizeQuiz(raw) {
+  const quiz = idleQuiz();
+  if (!raw || typeof raw !== "object") return quiz;
+  const round = raw.round;
+  if (round && round.question) {
+    const options = [];
+    const seen = new Set();
+    for (const item of Array.isArray(round.options) ? round.options : []) {
+      const key = String(item && item.key || "").trim().toUpperCase();
+      const text = String(item && item.text || "").trim().slice(0, 80);
+      if (!QUIZ_LETTERS.includes(key) || seen.has(key) || !text) continue;
+      seen.add(key);
+      options.push({ key, text });
+    }
+    options.sort((a, b) => QUIZ_LETTERS.indexOf(a.key) - QUIZ_LETTERS.indexOf(b.key));
+    const answers = [...new Set(
+      (Array.isArray(round.answers) ? round.answers : [])
+        .map((key) => String(key || "").trim().toUpperCase())
+        .filter((key) => seen.has(key))
+    )];
+    if (options.length >= 2 && answers.length) {
+      quiz.round = {
+        id: String(round.id || uid("q")),
+        question: String(round.question).trim().slice(0, 200),
+        prize: String(round.prize || "竞答奖品").trim().slice(0, 30) || "竞答奖品",
+        options,
+        answers,
+        status: round.status === "closed" ? "closed" : round.status === "open" ? "open" : "reading",
+        elapsedBefore: Math.max(0, Number(round.elapsedBefore) || 0),
+        runningSince: round.status === "open" ? (Number(round.runningSince) || null) : null,
+      };
+    }
+  }
+  const roundIds = new Set(quiz.round ? [quiz.round.id] : []);
+  const guestSeen = new Set();
+  for (const item of Array.isArray(raw.awards) ? raw.awards : []) {
+    if (!item || !item.roundId || !item.guestId) continue;
+    const roundId = String(item.roundId);
+    const guestId = String(item.guestId);
+    if (guestSeen.has(guestId)) continue;
+    if (quiz.awards.some((award) => award.roundId === roundId)) continue;
+    guestSeen.add(guestId);
+    roundIds.add(roundId);
+    quiz.awards.push({
+      roundId,
+      guestId,
+      number: Number(item.number),
+      elapsedMs: Math.max(0, Number(item.elapsedMs) || 0),
+      prize: String(item.prize || "").slice(0, 30),
+      question: String(item.question || "").slice(0, 200),
+      at: item.at || new Date().toISOString(),
+    });
+  }
+  const answered = new Set();
+  for (const item of Array.isArray(raw.submissions) ? raw.submissions : []) {
+    if (!item || !item.roundId || !item.guestId) continue;
+    const roundId = String(item.roundId);
+    const guestId = String(item.guestId);
+    const mark = `${roundId}:${guestId}`;
+    if (answered.has(mark)) continue;
+    answered.add(mark);
+    const choices = [...new Set(
+      (Array.isArray(item.choices) ? item.choices : [])
+        .map((key) => String(key || "").trim().toUpperCase())
+        .filter((key) => QUIZ_LETTERS.includes(key))
+    )];
+    quiz.submissions.push({
+      id: String(item.id || uid("qa")),
+      roundId,
+      guestId,
+      number: Number(item.number),
+      choices,
+      elapsedMs: Math.max(0, Number(item.elapsedMs) || 0),
+      correct: Boolean(item.correct),
+      result: ["wrong", "winner", "late", "already_awarded"].includes(item.result) ? item.result : "wrong",
+      at: item.at || new Date().toISOString(),
+    });
+  }
+  return quiz;
+}
+
+function pauseQuizClock(quiz, now) {
+  const round = quiz && quiz.round;
+  if (!round || round.status !== "open" || !round.runningSince) return;
+  round.elapsedBefore += Math.max(0, now - round.runningSince);
+  round.runningSince = null;
+}
+
+function resumeQuizClock(quiz, now) {
+  const round = quiz && quiz.round;
+  if (!round || round.status !== "open" || round.runningSince) return;
+  round.runningSince = now;
+}
+
+function quizElapsed(round, now) {
+  if (!round) return 0;
+  let ms = Math.max(0, Number(round.elapsedBefore) || 0);
+  if (round.runningSince) ms += Math.max(0, now - round.runningSince);
+  return ms;
+}
+
+function sameChoiceSet(left, right) {
+  if (left.length !== right.length) return false;
+  const wanted = new Set(right);
+  return left.every((key) => wanted.has(key));
+}
+
+function parseQuizSetup(body) {
+  const question = String(body.question || "").trim().slice(0, 200);
+  const prize = String(body.prize || "").trim().slice(0, 30);
+  if (!question) fail(400, "请填写题目");
+  if (!prize) fail(400, "请填写奖品");
+  if (!Array.isArray(body.options)) fail(400, "请设置选项");
+  const options = [];
+  const seen = new Set();
+  const answers = [];
+  for (const item of body.options) {
+    const key = String(item && item.key || "").trim().toUpperCase();
+    if (!QUIZ_LETTERS.includes(key) || seen.has(key)) continue;
+    const text = String(item && item.text || "").trim().slice(0, 80);
+    if (!text) fail(400, `选项 ${key} 的内容不能为空`);
+    seen.add(key);
+    options.push({ key, text });
+    if (item.correct) answers.push(key);
+  }
+  options.sort((a, b) => QUIZ_LETTERS.indexOf(a.key) - QUIZ_LETTERS.indexOf(b.key));
+  if (options.length < 2) fail(400, "至少保留两个选项");
+  if (!answers.length) fail(400, "请至少勾选一个正确答案");
+  return { question, prize, options, answers };
+}
+
+function parseQuizChoices(raw, allowed) {
+  const list = Array.isArray(raw) ? raw : [];
+  const choices = [];
+  for (const item of list) {
+    const key = String(item || "").trim().toUpperCase();
+    if (!allowed.has(key) || choices.includes(key)) continue;
+    choices.push(key);
+  }
+  choices.sort((a, b) => QUIZ_LETTERS.indexOf(a) - QUIZ_LETTERS.indexOf(b));
+  if (!choices.length) fail(400, "请选择答案");
+  return choices;
+}
+
+function closeQuizRound(quiz, now) {
+  const round = quiz.round;
+  if (!round || round.status === "closed") return;
+  pauseQuizClock(quiz, now);
+  round.status = "closed";
+}
+
+function publicQuiz(store, now = Date.now()) {
+  const quiz = store.quiz || idleQuiz();
+  const round = quiz.round;
+  const award = round ? quiz.awards.find((item) => item.roundId === round.id) || null : null;
+  const answerCount = round
+    ? quiz.submissions.filter((item) => item.roundId === round.id).length
+    : 0;
+  return {
+    round: round
+      ? {
+          id: round.id,
+          question: round.question,
+          prize: round.prize,
+          status: round.status,
+          elapsedBefore: round.elapsedBefore || 0,
+          runningSince: round.status === "open" ? round.runningSince : null,
+          answerCount,
+          options: round.status === "reading"
+            ? []
+            : round.options.map((option) => ({
+                key: option.key,
+                text: option.text,
+                ...(round.status === "closed" ? { correct: round.answers.includes(option.key) } : {}),
+              })),
+        }
+      : null,
+    winner: award
+      ? {
+          roundId: award.roundId,
+          number: award.number,
+          elapsedMs: award.elapsedMs,
+          prize: award.prize,
+        }
+      : null,
+    awards: quiz.awards.map((item) => ({
+      roundId: item.roundId,
+      number: item.number,
+      elapsedMs: item.elapsedMs,
+      prize: item.prize,
+      question: item.question,
+    })),
+    serverNow: now,
+  };
+}
+
+function hostQuizView(store) {
+  const quiz = store.quiz || idleQuiz();
+  const round = quiz.round;
+  const submissions = round
+    ? quiz.submissions
+        .filter((item) => item.roundId === round.id)
+        .slice()
+        .sort((a, b) => a.elapsedMs - b.elapsedMs)
+    : [];
+  return {
+    program: store.program,
+    round: round
+      ? {
+          id: round.id,
+          question: round.question,
+          prize: round.prize,
+          status: round.status,
+          options: round.options,
+          answers: round.answers,
+          elapsedBefore: round.elapsedBefore || 0,
+          runningSince: round.runningSince,
+        }
+      : null,
+    submissions,
+    awards: quiz.awards,
+  };
+}
+
+function quizMineFor(store, guest) {
+  const round = store.quiz && store.quiz.round;
+  if (!guest || !round) return null;
+  const mine = store.quiz.submissions.find((item) => item.roundId === round.id && item.guestId === guest.id);
+  if (!mine) return null;
+  const award = store.quiz.awards.find((item) => item.roundId === round.id) || null;
+  return {
+    roundId: mine.roundId,
+    choices: mine.choices,
+    elapsedMs: mine.elapsedMs,
+    correct: mine.correct,
+    result: mine.result,
+    winner: award
+      ? { number: award.number, elapsedMs: award.elapsedMs, prize: award.prize }
+      : null,
+  };
+}
+
+function submitQuizAnswer(store, guest, rawChoices, now = Date.now()) {
+  if (store.program !== "quiz") fail(400, "现在不是有奖竞答环节");
+  const round = store.quiz && store.quiz.round;
+  if (round.status === "reading") fail(400, "请等主持人放出选项");
+  if (round.status !== "open" || !round.runningSince) fail(400, "本题还没开始或已经结束");
+  if (!guest) fail(403, "请先领取抽奖号码");
+  const allowed = new Set(round.options.map((option) => option.key));
+  const choices = parseQuizChoices(rawChoices, allowed);
+  const existing = store.quiz.submissions.find((item) => item.roundId === round.id && item.guestId === guest.id);
+  if (existing) return existing;
+  const correct = sameChoiceSet(choices, round.answers);
+  const elapsedMs = quizElapsed(round, now);
+  let result = "wrong";
+  if (correct) {
+    const roundWinner = store.quiz.awards.find((item) => item.roundId === round.id);
+    const alreadyAwarded = store.quiz.awards.some((item) => item.guestId === guest.id);
+    if (roundWinner) result = "late";
+    else if (alreadyAwarded) result = "already_awarded";
+    else {
+      result = "winner";
+      store.quiz.awards.push({
+        roundId: round.id,
+        guestId: guest.id,
+        number: guest.number,
+        elapsedMs,
+        prize: round.prize,
+        question: round.question,
+        at: new Date(now).toISOString(),
+      });
+    }
+  }
+  const submission = {
+    id: uid("qa"),
+    roundId: round.id,
+    guestId: guest.id,
+    number: guest.number,
+    choices,
+    elapsedMs,
+    correct,
+    result,
+    at: new Date(now).toISOString(),
+  };
+  store.quiz.submissions.push(submission);
+  return submission;
 }
 
 function clampInt(value, min, max, fallback) {
@@ -269,6 +567,8 @@ function publicState(store) {
     prizes: store.prizes,
     draws: store.draws,
     session: store.session,
+    program: store.program === "quiz" ? "quiz" : "lottery",
+    quiz: publicQuiz(store),
     currentLevel,
     currentPrize: currentPrize
       ? {
@@ -535,6 +835,7 @@ app.post("/api/me", (req, res) => {
     claimedCount: store.guests.length,
     win,
     displayMax: displayMax(store),
+    quizMine: quizMineFor(store, guest),
   });
 });
 
@@ -638,8 +939,13 @@ app.post("/api/setup", (req, res, next) => {
   });
 });
 
+function assertLotteryProgram(store) {
+  if (store.program === "quiz") fail(400, "当前是有奖竞答，请先回到抽奖环节");
+}
+
 app.post("/api/start", (req, res, next) => {
   mutateHost(req, res, next, (store) => {
+    assertLotteryProgram(store);
     if (store.session.phase !== "idle") fail(400, "抽奖已经开始");
     const active = levelsWithPrizes(store);
     if (!active.length) fail(400, "请先配置奖项");
@@ -661,6 +967,7 @@ app.post("/api/start", (req, res, next) => {
 
 app.post("/api/draw", (req, res, next) => {
   mutateHost(req, res, next, (store) => {
+    assertLotteryProgram(store);
     if (store.session.phase !== "drawing") fail(400, "当前不能抽号");
     const prize = findPrize(store, store.session.currentPrizeId);
     const level = findLevel(store, store.session.currentLevelId);
@@ -689,6 +996,7 @@ app.post("/api/draw", (req, res, next) => {
 
 app.post("/api/reveal", (req, res, next) => {
   mutateHost(req, res, next, (store) => {
+    assertLotteryProgram(store);
     if (store.session.phase !== "awaiting_reveal") fail(400, "请先抽完本轮号码");
     const prize = findPrize(store, store.session.currentPrizeId);
     const batch = store.session.currentBatch.slice();
@@ -710,6 +1018,7 @@ app.post("/api/reveal", (req, res, next) => {
 
 app.post("/api/continue", (req, res, next) => {
   mutateHost(req, res, next, (store) => {
+    assertLotteryProgram(store);
     if (store.session.phase === "revealed") {
       const levelId = store.session.currentLevelId;
       const currentId = store.session.currentPrizeId;
@@ -764,9 +1073,108 @@ app.post("/api/reset", (req, res, next) => {
     }
     store.draws = [];
     store.session = idleSession();
-    if (restoreDefaults || clearGuests) store.guests = [];
+    if (restoreDefaults || clearGuests) {
+      store.guests = [];
+      store.quiz = idleQuiz();
+    }
+    if (restoreDefaults) store.program = "lottery";
     return publicState(store);
   });
+});
+
+app.post("/api/program", (req, res, next) => {
+  mutateHost(req, res, next, (store) => {
+    const mode = req.body && req.body.mode;
+    if (mode !== "quiz" && mode !== "lottery") fail(400, "环节无效");
+    const now = Date.now();
+    if (mode === "lottery") pauseQuizClock(store.quiz, now);
+    store.program = mode;
+    if (mode === "quiz") resumeQuizClock(store.quiz, now);
+    return publicState(store);
+  });
+});
+
+app.get("/api/quiz/manage", (req, res) => {
+  const store = loadStore();
+  try {
+    requireHost(req, store);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message || "服务器错误" });
+    return;
+  }
+  res.json(hostQuizView(store));
+});
+
+app.post("/api/quiz/open", (req, res, next) => {
+  mutateHost(req, res, next, (store) => {
+    if (store.program !== "quiz") fail(400, "请先进入有奖竞答");
+    const setup = parseQuizSetup(req.body || {});
+    const now = Date.now();
+    closeQuizRound(store.quiz, now);
+    store.quiz.round = {
+      id: uid("q"),
+      question: setup.question,
+      prize: setup.prize,
+      options: setup.options,
+      answers: setup.answers,
+      status: "reading",
+      elapsedBefore: 0,
+      runningSince: null,
+    };
+    return publicState(store);
+  });
+});
+
+app.post("/api/quiz/release", (req, res, next) => {
+  mutateHost(req, res, next, (store) => {
+    if (store.program !== "quiz") fail(400, "请先进入有奖竞答");
+    const round = store.quiz.round;
+    if (!round) fail(400, "请先公布题目");
+    if (round.status === "closed") fail(400, "本题已结束");
+    if (round.status === "reading") {
+      round.status = "open";
+      round.elapsedBefore = 0;
+      round.runningSince = Date.now();
+    }
+    return publicState(store);
+  });
+});
+
+app.post("/api/quiz/close", (req, res, next) => {
+  mutateHost(req, res, next, (store) => {
+    if (store.program !== "quiz") fail(400, "请先进入有奖竞答");
+    if (!store.quiz.round) fail(400, "还没有题目");
+    closeQuizRound(store.quiz, Date.now());
+    return publicState(store);
+  });
+});
+
+app.post("/api/quiz/answer", (req, res, next) => {
+  withStore((store) => {
+    requireWeChatGuest(req);
+    const id = guestIdentity(req);
+    const guest = findGuest(store, id.fingerprint, id.cookieId, id.localId);
+    const submission = submitQuizAnswer(store, guest, req.body && req.body.choices);
+    const award = store.quiz.awards.find((item) => item.roundId === submission.roundId) || null;
+    return {
+      state: publicState(store),
+      payload: {
+        number: submission.number,
+        choices: submission.choices,
+        elapsedMs: submission.elapsedMs,
+        correct: submission.correct,
+        result: submission.result,
+        winner: award
+          ? { number: award.number, elapsedMs: award.elapsedMs, prize: award.prize }
+          : null,
+      },
+    };
+  })
+    .then((result) => {
+      broadcast({ type: "quiz", state: result.state });
+      res.json({ ...result.payload, state: result.state });
+    })
+    .catch(next);
 });
 
 function mutateHost(req, res, next, mutator, type = "state") {
@@ -880,6 +1288,98 @@ process.on("uncaughtException", (err) => {
 process.on("unhandledRejection", (err) => {
   console.error("未处理的 Promise:", err);
 });
+
+function runQuizSelfTest() {
+  function assert(cond, message) {
+    if (!cond) throw new Error(message);
+  }
+  function guest(id, number) {
+    return { id, number };
+  }
+  function openRound(store, answers, now) {
+    store.program = "quiz";
+    store.quiz.round = {
+      id: "q1",
+      question: "测试题",
+      prize: "红包",
+      options: [
+        { key: "A", text: "甲" },
+        { key: "B", text: "乙" },
+        { key: "C", text: "丙" },
+      ],
+      answers,
+      status: "open",
+      elapsedBefore: 0,
+      runningSince: now,
+    };
+  }
+  const store = {
+    program: "lottery",
+    draws: [{ number: 7 }],
+    session: { phase: "drawing", started: true, currentBatch: [7] },
+    quiz: idleQuiz(),
+  };
+  const drawsBefore = store.draws.length;
+  const phaseBefore = store.session.phase;
+  pauseQuizClock(store.quiz, 1000);
+  store.program = "quiz";
+  assert(store.draws.length === drawsBefore && store.session.phase === phaseBefore, "切换环节不应改动抽奖");
+  openRound(store, ["A", "C"], 5000);
+  store.quiz.round.status = "reading";
+  store.quiz.round.runningSince = null;
+  const hidden = publicQuiz(store, 5000);
+  assert(hidden.round.status === "reading" && hidden.round.options.length === 0, "读题时不能看到选项");
+  let blockedRead = false;
+  try {
+    submitQuizAnswer(store, guest("g0", 11), ["A"], 6000);
+  } catch (err) {
+    blockedRead = /选项/.test(err.message);
+  }
+  assert(blockedRead && store.quiz.submissions.length === 0, "放出选项前不能作答");
+  store.quiz.round.status = "open";
+  store.quiz.round.runningSince = 5000;
+  const partial = submitQuizAnswer(store, guest("g1", 12), ["A"], 8000);
+  assert(partial.result === "wrong" && store.quiz.awards.length === 0, "漏选不能获奖");
+  const extra = submitQuizAnswer(store, guest("g2", 13), ["A", "B", "C"], 9000);
+  assert(extra.result === "wrong", "多选不能获奖");
+  const first = submitQuizAnswer(store, guest("g3", 21), ["C", "A"], 11000);
+  assert(first.result === "winner" && first.elapsedMs === 6000, "第一位全部答对获奖");
+  assert(store.quiz.awards[0].number === 21, "奖品记在第一位答对的号码");
+  const again = submitQuizAnswer(store, guest("g3", 21), ["A", "C"], 12000);
+  assert(again === first && store.quiz.awards.length === 1, "重复提交不重复发奖");
+  const late = submitQuizAnswer(store, guest("g4", 22), ["A", "C"], 13000);
+  assert(late.result === "late" && store.quiz.awards.length === 1, "后来答对不发奖");
+  closeQuizRound(store.quiz, 14000);
+  store.quiz.round = {
+    id: "q2",
+    question: "第二题",
+    prize: "香囊",
+    options: store.quiz.round.options,
+    answers: ["B"],
+    status: "open",
+    elapsedBefore: 0,
+    runningSince: 20000,
+  };
+  const blocked = submitQuizAnswer(store, guest("g3", 21), ["B"], 21000);
+  assert(blocked.result === "already_awarded" && store.quiz.awards.length === 1, "已领奖的人再第一也无效");
+  const next = submitQuizAnswer(store, guest("g5", 30), ["B"], 23000);
+  assert(next.result === "winner" && store.quiz.awards[1].number === 30, "奖品留给下一位答对的人");
+  pauseQuizClock(store.quiz, 26000);
+  const frozen = quizElapsed(store.quiz.round, 90000);
+  assert(frozen === 6000, "回到抽奖后计时暂停");
+  assert(store.session.phase === "drawing" && store.session.currentBatch[0] === 7, "竞答过程不重置抽奖");
+  console.log("quiz self-test ok");
+}
+
+if (process.env.QUIZ_SELFTEST === "1") {
+  try {
+    runQuizSelfTest();
+  } catch (err) {
+    console.error(err);
+    process.exit(1);
+  }
+  process.exit(0);
+}
 
 if (require.main === module) {
   server.listen(PORT, "0.0.0.0", () => {

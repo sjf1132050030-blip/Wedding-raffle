@@ -554,9 +554,12 @@ function syncClaimUi(s) {
   }
 }
 
+let coverLeaving = false;
 async function enterLottery() {
-  if (!coverOpen()) return;
+  if (coverLeaving || !coverOpen()) return;
+  coverLeaving = true;
   await sfx.unlock();
+  if (!ui.cover || ui.cover.classList.contains("hidden")) return;
   sfx.intro();
   ui.cover.classList.add("leave");
   if (ui.hostQrFloat) ui.hostQrFloat.classList.toggle("hidden", !claimingOpen(state));
@@ -828,7 +831,7 @@ function setText(el, value) {
 function maybeAutoEnterScreen(s) {
   if (ROLE !== "screen") return;
   if (!coverOpen()) return;
-  if (s && s.session && (s.session.started || (s.session.phase && s.session.phase !== "idle"))) {
+  if (s && (s.program === "quiz" || (s.session && (s.session.started || (s.session.phase && s.session.phase !== "idle"))))) {
     enterLottery().then(() => {
       if (!sfx.ready) toast("点击右上角开启音乐");
     });
@@ -884,6 +887,7 @@ function renderStage(s) {
   }
   renderActions(s);
   if (!rolling) syncWall(s);
+  renderQuiz(s);
 }
 
 function renderActions(s) {
@@ -967,6 +971,8 @@ function applyState(next, opts = {}) {
   else hideReveal();
   syncSettingsLock();
   syncYouWin(state);
+  noteQuizWinner(state);
+  if (CAN_CONTROL && state && state.program === "quiz") refreshQuizManage();
 }
 
 async function refresh() {
@@ -1134,6 +1140,7 @@ async function restoreGuest() {
   try {
     const fp = await deviceFingerprint();
     const me = await api("/api/me", { fingerprint: fp, localId: guestLocalId() });
+    if (me.quizMine) quizMine = me.quizMine;
     if (me.number != null) setMyNumber(me.number, me.displayMax);
     if (ui.coverCount && me.claimedCount != null) {
       ui.coverCount.textContent = `已有 ${me.claimedCount} 人领取号码`;
@@ -1168,6 +1175,7 @@ async function claimMyNumber() {
     const result = await api("/api/claim", { fingerprint: fp, localId: guestLocalId() });
     clearInterval(timer);
     setMyNumber(result.number, result.displayMax);
+    if (state && state.program === "quiz") enterLottery();
     sfx.playClip(sfx.clips.ding, { volume: 0.95 });
     if (result.already) toast("这个微信已经领过号码");
   } catch (err) {
@@ -1243,6 +1251,7 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (!CAN_CONTROL) return;
+  if (state && state.program === "quiz") return;
   if (ui.hitOverlay && !ui.hitOverlay.classList.contains("hidden")) return;
   const revealOpen = ui.revealOverlay && !ui.revealOverlay.classList.contains("hidden");
   const btn = revealOpen
@@ -1494,6 +1503,402 @@ if (releaseHostBtn) {
     }
   });
 }
+
+let quizMine = null;
+let quizPicks = new Set();
+let quizPickRound = "";
+let quizViewKey = "";
+let quizManage = null;
+let quizManageReq = 0;
+let quizSending = false;
+let quizFanfareFor = "";
+let quizFanfareReady = false;
+let quizClock = { elapsedBefore: 0, runningSince: null, offset: 0 };
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function formatElapsed(ms) {
+  const safe = Math.max(0, Number(ms) || 0);
+  const totalCs = Math.round(safe / 10);
+  const cs = totalCs % 100;
+  const totalS = Math.floor(totalCs / 100);
+  const s = totalS % 60;
+  const m = Math.floor(totalS / 60);
+  const frac = String(cs).padStart(2, "0");
+  if (m > 0) return `${m}分${String(s).padStart(2, "0")}.${frac}秒`;
+  return `${s}.${frac}秒`;
+}
+
+function syncQuizClock(quiz) {
+  const round = quiz && quiz.round;
+  quizClock = {
+    elapsedBefore: round ? Number(round.elapsedBefore) || 0 : 0,
+    runningSince: round && round.status === "open" ? round.runningSince : null,
+    offset: ((quiz && quiz.serverNow) || Date.now()) - Date.now(),
+  };
+}
+
+function quizElapsedNow() {
+  const base = quizClock.elapsedBefore || 0;
+  if (!quizClock.runningSince) return base;
+  return base + Math.max(0, Date.now() + quizClock.offset - quizClock.runningSince);
+}
+
+function updateQuizClocks() {
+  const round = state && state.quiz && state.quiz.round;
+  let text = "尚未开始计时";
+  if (round && round.status === "open") text = formatElapsed(quizElapsedNow());
+  else if (round && round.status === "closed") text = `用时 ${formatElapsed(quizElapsedNow())}`;
+  for (const el of document.querySelectorAll("[data-quiz-clock]")) el.textContent = text;
+  const count = round ? round.answerCount || 0 : 0;
+  for (const el of document.querySelectorAll("[data-quiz-count]")) {
+    el.textContent = round && round.status !== "reading" ? `已提交 ${count} 人` : "";
+  }
+}
+
+function quizResultText(mine, quiz) {
+  const choices = (mine.choices || []).join("、");
+  const time = formatElapsed(mine.elapsedMs);
+  const winner = quiz && quiz.winner;
+  const winnerLine = winner
+    ? `首位获奖是 ${pad(winner.number)} 号，用时 ${formatElapsed(winner.elapsedMs)}。`
+    : "本题奖品还在等待下一位答对的宾客。";
+  if (mine.result === "winner") {
+    return `恭喜你，第一个答对。你的选择 ${choices}，用时 ${time}。奖品：${winner ? winner.prize : ""}。每人只能领一份竞答奖品。`;
+  }
+  if (mine.result === "late") {
+    return `虽然答对了，但有人比你更先答对。${winnerLine}你的选择 ${choices}，用时 ${time}。`;
+  }
+  if (mine.result === "already_awarded") {
+    const handed = winner && winner.number !== myNumber
+      ? winnerLine
+      : "这次默认无效，奖品留给下一位答对的宾客。";
+    return `虽然答对了，但你已经领过竞答奖品。${handed}你的选择 ${choices}，用时 ${time}。`;
+  }
+  return `这次没答对。你的选择 ${choices}，用时 ${time}。`;
+}
+
+function noteQuizWinner(s) {
+  if (ROLE !== "screen" || !s || s.program !== "quiz" || !s.quiz) return;
+  const winner = s.quiz.winner;
+  const key = winner ? `${winner.roundId}:${winner.number}` : "";
+  if (quizFanfareReady && key && key !== quizFanfareFor) {
+    sfx.fanfare();
+    burstConfetti();
+  }
+  quizFanfareFor = key;
+  quizFanfareReady = true;
+}
+
+function renderQuiz(s) {
+  const quizMode = Boolean(s && s.program === "quiz");
+  document.body.classList.toggle("mode-quiz", quizMode);
+  const note = $("programNote");
+  if (note) {
+    note.textContent = quizMode
+      ? "当前环节：有奖竞答。抽奖进度已保留，回到抽奖会从上次继续。"
+      : "当前环节：抽奖。进入有奖竞答不会清空已抽号码。";
+  }
+  if (!quizMode) return;
+  syncQuizClock(s.quiz);
+  if (ROLE === "guest" && myNumber != null) {
+    enterLottery();
+  }
+  if (CAN_CONTROL) {
+    renderQuizLive();
+    updateQuizClocks();
+    return;
+  }
+  const round = s.quiz && s.quiz.round;
+  if (quizMine && round && quizMine.roundId !== round.id) quizMine = null;
+  if (round && quizPickRound !== round.id) {
+    quizPickRound = round.id;
+    quizPicks = new Set();
+  }
+  const key = quizViewSignature(s);
+  if (key !== quizViewKey) {
+    quizViewKey = key;
+    paintQuizStage(s);
+  }
+  updateQuizClocks();
+}
+
+function quizViewSignature(s) {
+  const round = s.quiz && s.quiz.round;
+  if (!round) return "none";
+  const mine = quizMine && quizMine.roundId === round.id ? quizMine : null;
+  const winner = s.quiz.winner;
+  const opt = (round.options || []).map((o) => `${o.key}:${o.text}:${o.correct ? 1 : 0}`).join("|");
+  return [
+    round.id,
+    round.status,
+    round.question,
+    round.prize,
+    opt,
+    mine ? `${mine.result}:${mine.choices.join("")}:${mine.elapsedMs}` : "",
+    winner ? `${winner.number}:${winner.elapsedMs}` : "",
+    myNumber == null ? "" : myNumber,
+  ].join("~");
+}
+
+function paintQuizStage(s) {
+  const box = $("quizStage");
+  if (!box) return;
+  const quiz = s.quiz || {};
+  const round = quiz.round;
+  if (!round) {
+    box.innerHTML = `<p class="quiz-kicker">有奖竞答</p><p class="quiz-question">等待主持人出题</p>`;
+    return;
+  }
+  const mine = quizMine && quizMine.roundId === round.id ? quizMine : null;
+  const prize = `<p class="quiz-prize">奖品：${escapeHtml(round.prize || "")}</p>`;
+  const question = `<p class="quiz-question">${escapeHtml(round.question || "")}</p>`;
+  if (round.status === "reading") {
+    box.innerHTML = `<p class="quiz-kicker">有奖竞答</p>${prize}${question}<p class="hint">请听主持人读题，选项稍后放出</p>`;
+    return;
+  }
+  const locked = Boolean(mine) || round.status !== "open" || myNumber == null;
+  const selected = new Set(mine ? mine.choices : quizPicks);
+  const options = (round.options || []).map((option) => {
+    const on = selected.has(option.key) ? " on" : "";
+    const correct = option.correct ? " correct" : "";
+    return `<button class="quiz-choice${on}${correct}" type="button" data-quiz-choice="${option.key}" ${locked ? "disabled" : ""}>
+      <span class="quiz-key">${option.key}</span><span>${escapeHtml(option.text)}</span>
+    </button>`;
+  }).join("");
+  const clock = round.status === "open" ? `<p class="quiz-timer" data-quiz-clock>${formatElapsed(quizElapsedNow())}</p>` : "";
+  let extra = "";
+  if (ROLE === "guest" && myNumber == null) {
+    extra = `<p class="hint">请先领取幸运号码后再答题</p>`;
+  } else if (ROLE === "guest" && round.status === "open" && !mine) {
+    extra = `<p class="tiny">可以多选。必须选中全部正确答案，多选或漏选都算没答对。</p>
+      <button class="btn gold" type="button" data-quiz-submit>提交答案</button>`;
+  }
+  if (mine && ROLE === "guest") {
+    extra += `<div class="quiz-result${mine.result === "winner" ? " win" : ""}">${escapeHtml(quizResultText(mine, quiz))}</div>`;
+  }
+  if (ROLE === "screen") {
+    if (quiz.winner) {
+      extra += `<div class="quiz-winner">首位答对 ${pad(quiz.winner.number)} 号 · ${formatElapsed(quiz.winner.elapsedMs)} · ${escapeHtml(quiz.winner.prize || "")}</div>`;
+    } else if (round.status === "open") {
+      extra += `<p class="hint">等待第一位答对的宾客</p>`;
+    } else {
+      extra += `<p class="hint">本题已结束</p>`;
+    }
+    extra += `<p class="tiny" data-quiz-count></p>`;
+  }
+  const wonBefore = (quiz.awards || []).find((item) => item.number === myNumber);
+  const owned = wonBefore && ROLE === "guest"
+    ? `<p class="tiny">你已获得过竞答奖品：${escapeHtml(wonBefore.prize || "")}。再第一名答对也不会重复领奖。</p>`
+    : "";
+  box.innerHTML = `<p class="quiz-kicker">有奖竞答</p>${prize}${question}${clock}<div class="quiz-options">${options}</div>${extra}${owned}`;
+}
+
+function renderQuizLive() {
+  const round = state && state.quiz && state.quiz.round;
+  const hint = $("quizPhaseHint");
+  const release = $("quizRelease");
+  const closeBtn = $("quizClose");
+  if (release) release.disabled = !round || round.status !== "reading";
+  if (closeBtn) closeBtn.disabled = !round || round.status === "closed";
+  if (hint) {
+    if (!round) hint.textContent = "先填写题目和选项，再公布题目。公布后嘉宾只能看到题目，还不能选择。";
+    else if (round.status === "reading") hint.textContent = "题目已公布。念完后点「放出选项」，嘉宾才能作答，计时从这时开始。";
+    else if (round.status === "open") hint.textContent = "选项已放出，正在计时。奖品给第一位答对、且还没领过竞答奖的宾客。";
+    else hint.textContent = "本题已结束。可以公布下一题，或回到抽奖。";
+  }
+  const live = $("quizLive");
+  if (!live) return;
+  const managedRound = quizManage && quizManage.round;
+  const same = managedRound && round && managedRound.id === round.id;
+  const answers = same ? (managedRound.answers || []).join("、") : "";
+  const rows = same
+    ? (quizManage.submissions || []).map((item) => {
+        const label = item.result === "winner"
+          ? "首位答对，获得奖品"
+          : item.result === "late"
+            ? "答对，但有人更快"
+            : item.result === "already_awarded"
+              ? "答对，但已领过奖，本题无效"
+              : "未答对";
+        return `<div class="quiz-live-row">${pad(item.number)} 号 · ${escapeHtml((item.choices || []).join("、"))} · ${formatElapsed(item.elapsedMs)} · ${label}</div>`;
+      }).join("")
+    : "";
+  const winner = state.quiz && state.quiz.winner;
+  live.innerHTML = `${answers ? `<p class="tiny">正确答案：${escapeHtml(answers)}</p>` : ""}
+    ${winner ? `<div class="quiz-winner">获奖 ${pad(winner.number)} 号 · ${formatElapsed(winner.elapsedMs)} · ${escapeHtml(winner.prize || "")}</div>` : ""}
+    ${rows || `<p class="tiny">${round && round.status !== "reading" ? "还没有人提交" : "放出选项后，这里显示宾客的选择和时间"}</p>`}`;
+}
+
+async function refreshQuizManage() {
+  if (!CAN_CONTROL || !state || state.program !== "quiz") {
+    quizManage = null;
+    return;
+  }
+  const seq = ++quizManageReq;
+  try {
+    const data = await api("/api/quiz/manage");
+    if (seq !== quizManageReq) return;
+    quizManage = data;
+    renderQuizLive();
+  } catch {
+    /* 控制台未登录时忽略 */
+  }
+}
+
+function buildQuizEditor() {
+  const box = $("quizOptions");
+  if (!box || box.dataset.ready) return;
+  box.dataset.ready = "1";
+  box.innerHTML = ["A", "B", "C", "D", "E"].map((key) => `
+    <div class="quiz-opt-edit">
+      <label><input type="checkbox" data-quiz-on="${key}" ${key < "E" ? "checked" : ""} /> ${key}</label>
+      <input type="text" data-quiz-text="${key}" maxlength="80" placeholder="选项${key}" />
+      <label><input type="checkbox" data-quiz-ok="${key}" /> 正确</label>
+    </div>
+  `).join("");
+}
+
+function readQuizSetup() {
+  const question = $("quizQuestion") ? $("quizQuestion").value.trim() : "";
+  const prize = $("quizPrize") ? $("quizPrize").value.trim() : "";
+  const options = [];
+  for (const key of ["A", "B", "C", "D", "E"]) {
+    const on = document.querySelector(`[data-quiz-on="${key}"]`);
+    const text = document.querySelector(`[data-quiz-text="${key}"]`);
+    const correct = document.querySelector(`[data-quiz-ok="${key}"]`);
+    if (!on || !on.checked) continue;
+    options.push({
+      key,
+      text: text ? text.value.trim() : "",
+      correct: Boolean(correct && correct.checked),
+    });
+  }
+  return { question, prize, options };
+}
+
+async function setProgram(mode) {
+  if (!CAN_CONTROL || busy) return;
+  try {
+    setBusy(true);
+    applyState(await api("/api/program", { mode }));
+    closeSettings();
+    toast(mode === "quiz" ? "已进入有奖竞答，抽奖进度保留" : "已回到抽奖，从上次继续");
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function publishQuiz() {
+  if (!CAN_CONTROL || busy) return;
+  const round = state && state.quiz && state.quiz.round;
+  if (round && round.status !== "closed") {
+    if (!confirm("当前题目还没结束。公布新题会结束上一题，确定吗？")) return;
+  }
+  try {
+    setBusy(true);
+    applyState(await api("/api/quiz/open", readQuizSetup()));
+    toast("题目已公布。念完后请点放出选项");
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function releaseQuiz() {
+  if (!CAN_CONTROL || busy) return;
+  try {
+    setBusy(true);
+    applyState(await api("/api/quiz/release", {}));
+    toast("选项已放出，开始计时");
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function closeQuiz() {
+  if (!CAN_CONTROL || busy) return;
+  try {
+    setBusy(true);
+    applyState(await api("/api/quiz/close", {}));
+    toast("本题已结束");
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function submitQuiz() {
+  if (ROLE !== "guest" || quizSending) return;
+  const round = state && state.quiz && state.quiz.round;
+  if (!round || round.status !== "open") {
+    toast("现在还不能作答");
+    return;
+  }
+  if (myNumber == null) {
+    toast("请先领取抽奖号码");
+    return;
+  }
+  if (!quizPicks.size) {
+    toast("请选择答案");
+    return;
+  }
+  quizSending = true;
+  try {
+    const fp = await deviceFingerprint();
+    const data = await api("/api/quiz/answer", {
+      choices: [...quizPicks],
+      fingerprint: fp,
+      localId: guestLocalId(),
+    });
+    quizMine = {
+      roundId: round.id,
+      choices: data.choices,
+      elapsedMs: data.elapsedMs,
+      correct: data.correct,
+      result: data.result,
+    };
+    if (data.state) applyState(data.state);
+    else if (state) renderQuiz(state);
+    if (data.result === "winner") sfx.unlock().then(() => sfx.fanfare()).catch(() => {});
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    quizSending = false;
+  }
+}
+
+buildQuizEditor();
+onEl($("enterQuiz"), "click", () => setProgram("quiz"));
+onEl($("backToLottery"), "click", () => setProgram("lottery"));
+onEl($("quizPublish"), "click", () => publishQuiz());
+onEl($("quizRelease"), "click", () => releaseQuiz());
+onEl($("quizClose"), "click", () => closeQuiz());
+onEl($("quizBack"), "click", () => setProgram("lottery"));
+onEl($("quizStage"), "click", (e) => {
+  const choice = e.target.closest("[data-quiz-choice]");
+  if (choice && !choice.disabled) {
+    const key = choice.dataset.quizChoice;
+    if (quizPicks.has(key)) quizPicks.delete(key);
+    else quizPicks.add(key);
+    choice.classList.toggle("on", quizPicks.has(key));
+    return;
+  }
+  if (e.target.closest("[data-quiz-submit]")) submitQuiz();
+});
+setInterval(updateQuizClocks, 100);
 
 function sparkles() {
   const canvas = $("sparkles");
