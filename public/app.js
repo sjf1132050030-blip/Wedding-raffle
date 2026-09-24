@@ -1573,7 +1573,8 @@ function quizResultText(mine, quiz) {
     ? `首位获奖是 ${pad(winner.number)} 号，用时 ${formatElapsed(winner.elapsedMs)}。`
     : "本题奖品还在等待下一位答对的宾客。";
   if (mine.result === "winner") {
-    return `恭喜你，第一个答对。你的选择 ${choices}，用时 ${time}。奖品：${winner ? winner.prize : ""}。每人只能领一份竞答奖品。`;
+    const prizeText = winner && winner.prize ? `奖品：${winner.prize}。` : "奖品在本题结束后公布。";
+    return `恭喜你，第一个答对。你的选择 ${choices}，用时 ${time}。${prizeText}每人只能领一份竞答奖品。`;
   }
   if (mine.result === "late") {
     return `虽然答对了，但有人比你更先答对。${winnerLine}你的选择 ${choices}，用时 ${time}。`;
@@ -1674,10 +1675,12 @@ function paintQuizStage(s) {
     return;
   }
   const mine = quizMine && quizMine.roundId === round.id ? quizMine : null;
-  const prize = `<p class="quiz-prize">奖品：${escapeHtml(round.prize || "")}</p>`;
+  const prize = round.status === "closed" && round.prize
+    ? `<p class="quiz-prize">奖品：${escapeHtml(round.prize)}</p>`
+    : "";
   const question = `<p class="quiz-question">${escapeHtml(round.question || "")}</p>`;
   if (round.status === "reading") {
-    box.innerHTML = `${kicker}${prize}${question}<p class="hint">请听主持人读题，选项稍后放出</p>`;
+    box.innerHTML = `<div class="quiz-main">${kicker}${question}<p class="hint">请听主持人读题，选项稍后放出</p></div>`;
     return;
   }
   const locked = Boolean(mine) || round.status !== "open" || myNumber == null;
@@ -1695,14 +1698,15 @@ function paintQuizStage(s) {
     extra = `<p class="hint">请先领取幸运号码后再答题</p>`;
   } else if (ROLE === "guest" && round.status === "open" && !mine) {
     extra = `<p class="tiny">可以多选。必须选中全部正确答案，多选或漏选都算没答对。</p>
-      <button class="btn gold" type="button" data-quiz-submit>提交答案</button>`;
+      <button class="btn gold quiz-submit" type="button" data-quiz-submit>提交答案</button>`;
   }
   if (mine && ROLE === "guest") {
     extra += `<div class="quiz-result${mine.result === "winner" ? " win" : ""}">${escapeHtml(quizResultText(mine, quiz))}</div>`;
   }
   if (ROLE === "screen") {
     if (quiz.winner) {
-      extra += `<div class="quiz-winner">首位答对 ${pad(quiz.winner.number)} 号 · ${formatElapsed(quiz.winner.elapsedMs)} · ${escapeHtml(quiz.winner.prize || "")}</div>`;
+      const prizeText = round.status === "closed" && quiz.winner.prize ? ` · ${escapeHtml(quiz.winner.prize)}` : "";
+      extra += `<div class="quiz-winner">首位答对 ${pad(quiz.winner.number)} 号 · ${formatElapsed(quiz.winner.elapsedMs)}${prizeText}</div>`;
     } else if (round.status === "open") {
       extra += `<p class="hint">等待第一位答对的宾客</p>`;
     } else {
@@ -1712,9 +1716,9 @@ function paintQuizStage(s) {
   }
   const wonBefore = (quiz.awards || []).find((item) => item.number === myNumber);
   const owned = wonBefore && ROLE === "guest"
-    ? `<p class="tiny">你已获得过竞答奖品：${escapeHtml(wonBefore.prize || "")}。再第一名答对也不会重复领奖。</p>`
+    ? `<p class="tiny">你已获得过竞答奖品${wonBefore.prize ? `：${escapeHtml(wonBefore.prize)}` : ""}。再第一名答对也不会重复领奖。</p>`
     : "";
-  box.innerHTML = `${kicker}${prize}${question}${clock}<div class="quiz-options">${options}</div>${extra}${owned}`;
+  box.innerHTML = `<div class="quiz-main">${kicker}${prize}${question}${clock}<div class="quiz-options">${options}</div></div><div class="quiz-foot">${extra}${owned}</div>`;
 }
 
 function renderQuizLive() {

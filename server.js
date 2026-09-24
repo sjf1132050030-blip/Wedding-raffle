@@ -512,6 +512,7 @@ function publicQuiz(store, now = Date.now()) {
     const index = items.findIndex((item) => item.id === round.itemId);
     if (index >= 0) current = index + 1;
   }
+  const showPrize = Boolean(round && round.status === "closed");
   return {
     progress: {
       current,
@@ -523,7 +524,7 @@ function publicQuiz(store, now = Date.now()) {
           id: round.id,
           itemId: round.itemId || "",
           question: round.question,
-          prize: round.prize,
+          prize: showPrize ? round.prize : "",
           status: round.status,
           elapsedBefore: round.elapsedBefore || 0,
           runningSince: round.status === "open" ? round.runningSince : null,
@@ -533,7 +534,7 @@ function publicQuiz(store, now = Date.now()) {
             : round.options.map((option) => ({
                 key: option.key,
                 text: option.text,
-                ...(round.status === "closed" ? { correct: round.answers.includes(option.key) } : {}),
+                ...(showPrize ? { correct: round.answers.includes(option.key) } : {}),
               })),
         }
       : null,
@@ -542,14 +543,14 @@ function publicQuiz(store, now = Date.now()) {
           roundId: award.roundId,
           number: award.number,
           elapsedMs: award.elapsedMs,
-          prize: award.prize,
+          prize: showPrize ? award.prize : "",
         }
       : null,
     awards: quiz.awards.map((item) => ({
       roundId: item.roundId,
       number: item.number,
       elapsedMs: item.elapsedMs,
-      prize: item.prize,
+      prize: round && item.roundId === round.id && !showPrize ? "" : item.prize,
       question: item.question,
     })),
     serverNow: now,
@@ -1321,7 +1322,11 @@ app.post("/api/quiz/answer", (req, res, next) => {
         correct: submission.correct,
         result: submission.result,
         winner: award
-          ? { number: award.number, elapsedMs: award.elapsedMs, prize: award.prize }
+          ? {
+              number: award.number,
+              elapsedMs: award.elapsedMs,
+              prize: store.quiz.round && store.quiz.round.status === "closed" ? award.prize : "",
+            }
           : null,
       },
     };
@@ -1558,6 +1563,12 @@ function runQuizSelfTest() {
   assert(bankStore.quiz.played[0] === "qa_one", "出过的题目记下来");
   const hiddenBank = publicQuiz(bankStore, 1000);
   assert(hiddenBank.progress.current === 1 && hiddenBank.progress.total === 2, "公开进度只有题号");
+  assert(!hiddenBank.round.prize, "读题时不公布奖品");
+  bankStore.quiz.round.status = "open";
+  bankStore.quiz.round.runningSince = 1200;
+  assert(!publicQuiz(bankStore, 1300).round.prize, "作答时不公布奖品");
+  closeQuizRound(bankStore.quiz, 1400);
+  assert(publicQuiz(bankStore, 1400).round.prize === "红包", "结束后才公布奖品");
   assert(!Object.prototype.hasOwnProperty.call(hiddenBank, "items"), "公开状态不含题库");
   assert(!JSON.stringify(hiddenBank).includes("香囊"), "还没轮到的题目不能出现在公开状态");
   const kept = bankStore.quiz.items.map((item) => ({
